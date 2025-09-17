@@ -85,6 +85,7 @@ export class GameApp {
 
   public async start(): Promise<void> {
     this.engine.init(this.container);
+    const base = import.meta.env.BASE_URL;
     const game = this.cfg.getGame();
     const tickHz = (game as any).loop?.tickHz ?? 60;
     this.stepSec = 1 / tickHz;
@@ -131,9 +132,9 @@ export class GameApp {
       });
     }
     // Resources, Spawns, Enemies
-    await this.cfg.loadResourcesConfigBrowser('/config/resources.json5');
-    await this.cfg.loadSpawnConfigBrowser('/config/spawn.json5');
-    await this.cfg.loadEnemiesConfigBrowser('/config/enemies.json5');
+    await this.cfg.loadResourcesConfigBrowser(`${base}config/resources.json5`);
+    await this.cfg.loadSpawnConfigBrowser(`${base}config/spawn.json5`);
+    await this.cfg.loadEnemiesConfigBrowser(`${base}config/enemies.json5`);
     this.resources = new ResourceSystem(this.bus, this.cfg);
     this.spawner = new SpawnSystem(this.bus, this.cfg);
     this.spawner.setConfig(this.cfg.getSpawn());
@@ -153,7 +154,7 @@ export class GameApp {
     for (const k of Object.keys(this.cfg.getResources().weights)) this.storedTotals[k] = 0;
 
     // Load buildables and spawn a 9x9 perimeter of walls with one door
-    await this.cfg.loadBuildablesConfigBrowser('/config/buildables.json5');
+    await this.cfg.loadBuildablesConfigBrowser(`${base}config/buildables.json5`);
     const fort = (this.cfg.getBuildables() as any).fort;
     const tile = this.cfg.getGame().tileSize;
     const sizeTiles = 9;

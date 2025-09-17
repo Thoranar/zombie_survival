@@ -7,7 +7,8 @@ async function boot(): Promise<void> {
   const container = document.getElementById('app');
   if (!container) throw new Error('Missing #app container');
   const cfg = new ConfigService();
-  await cfg.loadGameConfigBrowser('/config/game.json5');
+  const base = import.meta.env.BASE_URL;
+  await cfg.loadGameConfigBrowser(`${base}config/game.json5`);
   const app = new GameApp(new Canvas2DEngine(), new EventBus(), cfg, container);
   await app.start();
 }
