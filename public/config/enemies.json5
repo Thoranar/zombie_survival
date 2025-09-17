@@ -1,0 +1,57 @@
+{
+  // Global tuning for enemy behaviors
+  "globals": {
+    // Multiplier applied to each enemy's detect radius by phase
+    // Smaller in day, larger at night, largest during eclipse
+    "detectScaleByPhase": { "day": 0.8, "night": 1.1, "eclipse": 1.25 },
+    // Horde tuning
+    "horde": {
+      // Movement speed multiplier for zombies while in a horde (vs solo)
+      "speedFactor": 0.85,
+      // Formation radius in tiles around the horde leader (slot distance)
+      "formationRadiusTiles": 1.5,
+      // How often to recompute clustering (seconds)
+      "clusterIntervalSec": 0.25,
+      // Angular spread around directly-behind (PI rad) for follower slot angles (radians)
+      // Example: 1.6 rad ≈ 91.6° total ±45.8°, 2.51 rad ≈ ±72° (shown below)
+      "angleSpreadRad": 2.513,
+      // Per-follower radius jitter (multiplicative) [min, max]
+      "radiusJitter": { "min": 0.85, "max": 1.25 },
+      // Wobble amplitude as fraction of base radius and random range multiplier
+      "wobble": { "ampFrac": 0.15, "randMin": 0.5, "randMax": 1.5, "freqMin": 0.5, "freqMax": 1.5 },
+      // Soft separation (avoid stacking) in tiles and blend weight (0..1)
+      "separationTiles": 2.0,
+      "separationWeight": 0.6,
+      // Time to drop aggro after losing player senses (seconds)
+      "aggroDropSec": 1.2,
+      // Edge avoidance margin in tiles near world bounds
+      "edgeAvoidMarginTiles": 2
+    },
+    // Idle/move behavior by phase (used for roam scheduling)
+    "idleModel": {
+      "day":    { "idleMinSec": 4, "idleMaxSec": 9, "soloMoveMinTiles": 6,  "soloMoveMaxTiles": 14, "leaderMoveMinTiles": 40, "leaderMoveMaxTiles": 60 },
+      "night":  { "idleMinSec": 2, "idleMaxSec": 6, "soloMoveMinTiles": 10, "soloMoveMaxTiles": 20, "leaderMoveMinTiles": 50, "leaderMoveMaxTiles": 80 },
+      "eclipse":{ "idleMinSec": 1, "idleMaxSec": 3, "soloMoveMinTiles": 14, "soloMoveMaxTiles": 24, "leaderMoveMinTiles": 60, "leaderMoveMaxTiles": 100 }
+    }
+  },
+  "BaseZombie": {
+    // speeds in tiles/sec
+    "walkTiles": 2.0,
+    "sprintTiles": 3.5,
+    // health
+    "hp": 50,
+    // detection radius in tiles (hearing/vision simplified)
+    "detectRadiusTiles": 8,
+    // attack (stubbed for later integration)
+    "attackPower": 6,
+    "attackIntervalSec": 1.2,
+    "attackRangeTiles": 0.7
+  },
+  // Simple walker archetype (inherits BaseZombie via code merge)
+  "Walker": {
+    // Optional per-type overrides (left empty to use BaseZombie defaults in this pass)
+    // Example: "walkTiles": 1.8,
+    // Initial spawn count for first pass
+    "initialCount": 10
+  }
+}

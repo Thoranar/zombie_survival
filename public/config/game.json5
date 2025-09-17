@@ -1,0 +1,55 @@
+{
+  // tile size in pixels
+  "tileSize": 32,
+  // day/night/eclipses in seconds
+  "dayNight": { "daySec": 10, "nightSec": 10, "eclipseSec": 10, "eclipseEvery": 3 },
+  // world size in tiles (camera clamps to these bounds)
+  "world": { "widthTiles": 90, "heightTiles": 90 },
+  // render-only hints
+  "render": {
+    "playerRadiusTiles": 0.35,
+    // Camera zoom (1 = default). Higher = closer (more zoomed-in)
+    "zoom": 1.5,
+    // RGBA tint for night overlay
+    "nightTint": { "color": "#001020", "alpha": 0.35 },
+    // Stronger/different tint during Eclipse nights
+    "eclipseTint": { "color": "#200010", "alpha": 0.5 }
+  },
+  // Debug-only UI tuning
+  "noise": {
+    "uiDecayPerSec": 5,
+    // movement noise radius in tiles while moving
+    "movement": { "walkTiles": 4, "crouchTiles": 2, "sprintTiles": 7 },
+    // how fast noise radius changes (tiles/sec)
+    "rampTilesPerSec": 6,
+    // how fast noise radius decays toward 0 when idle or to lower targets (tiles/sec)
+    "decayTilesPerSec": 5,
+    // harvest noise: tiles per second of radius growth per 1.0 noisePerSec from throttle
+    "harvestTilesPerNoise": 8,
+    // tiles radius pulses when opening/closing a door (lower values)
+    "doorOpenTiles": 1.5,
+    "doorCloseTiles": 1.0,
+    // harvest scaling factor per second for continuous harvesting (multiplies contribution over time)
+    "harvestScalePerSec": 0.15
+  },
+  "ui": { "hintSec": 2 },
+  // loop settings
+  "loop": { "tickHz": 60 },
+  // gameplay examples retained for future milestones
+  "player": {
+    "hp": 100,
+    "walkSpeed": 3.6,
+    "crouchSpeed": 2.0,
+    "sprintSpeed": 5.0,
+    "pushCooldownSec": 5,
+    "carryCap": 10,
+    // interaction range (tiles) to harvest nodes
+    "harvestRangeTiles": 1.75,
+    // seconds per single harvest action
+    "harvestActionSec": 2,
+    // factor applied to all movement speeds when above carryCap (e.g., 0.5)
+    "overCapacitySpeedFactor": 0.5
+  },
+  "storage": { "autoDepositRadius": 2 },
+  "horde": { "noiseThreshold": 70, "sustainSec": 4, "cooldownSec": 30 }
+}

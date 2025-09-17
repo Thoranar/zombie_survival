@@ -1,0 +1,8 @@
+{
+  "globals": { "salvageRefundPct": 50 },
+  "fort": {
+    "Wall": { "cost": { "Scrap": 4, "Wood": 4 }, "hp": 200 },
+    "Door": { "cost": { "Wood": 4 }, "hp": 180 }
+  }
+}
+

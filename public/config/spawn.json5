@@ -1,0 +1,16 @@
+{
+  "respawnEveryDays": 3,
+  // minimum separation between spawned nodes (in tiles)
+  "minSeparationTiles": 2,
+  // do not spawn nodes within this radius around start position (in tiles)
+  "noSpawnRadiusTilesAroundStart": 12,
+  // Total nodes clamp (optional)
+  "totals": { "min": 6, "max": 16 },
+  // Per-type spawn rules with rarity weights and phase gating
+  "resourceNodes": {
+    "ScrapHeap": { "min": 3, "max": 8, "rarity": 1.0, "phase": "any" },
+    "LumberStack": { "min": 3, "max": 8, "rarity": 1.0, "phase": "any" },
+    "CrystalVein": { "min": 1, "max": 3, "rarity": 0.6, "phase": "night" }
+  },
+  "storage": { "count": 1 }
+}

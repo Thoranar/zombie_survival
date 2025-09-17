@@ -1,0 +1,14 @@
+{
+  "nodes": {
+    // tileAreaTiles: size expressed as tile count area; must be a perfect square (1, 4, 9, ...)
+    "ScrapHeap": { "yield": "Scrap", "phase": "any", "color": "#9e9e9e", "noiseLevel": 1.0, "tileAreaTiles": 4, "capacityMin": 80, "capacityMax": 140, "respawnSecMin": 60, "respawnSecMax": 90, "threatWeight": 1.0 },
+    "LumberStack": { "yield": "Wood", "phase": "any", "color": "#8bc34a", "noiseLevel": 0.8, "tileAreaTiles": 1, "capacityMin": 80, "capacityMax": 140, "respawnSecMin": 60, "respawnSecMax": 90, "threatWeight": 1.0 },
+    "CrystalVein": { "yield": "Crystal", "phase": "night", "color": "#80deea", "noiseLevel": 1.2, "tileAreaTiles": 1, "capacityMin": 40, "capacityMax": 80, "respawnSecMin": 90, "respawnSecMax": 120, "threatWeight": 1.6 }
+  },
+  "throttles": {
+    "Quiet":  { "ratePerSec": 0.5, "noisePerSec": 0.15 },
+    "Normal": { "ratePerSec": 1.0, "noisePerSec": 0.4 },
+    "Loud":   { "ratePerSec": 1.6, "noisePerSec": 0.9, "clankChancePer5s": 0.1, "clankNoisePulse": 1.5, "clankCapacityPenalty": 10 }
+  },
+  "weights": { "Scrap": 1, "Wood": 1, "Chem": 1, "Crystal": 3 }
+}

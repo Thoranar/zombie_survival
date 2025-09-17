@@ -1,0 +1,11 @@
+{
+      // comment line
+      "tileSize": 32,
+      "dayNight": { "daySec": 120, "nightSec": 90, "eclipseSec": 180, "eclipseEvery": 3 },
+      "player": { "hp": 100, "walkSpeed": 1, "crouchSpeed": 1, "sprintSpeed": 1, "pushCooldownSec": 1, "carryCap": 1 },
+      /* block comment */
+      "storage": { "autoDepositRadius": 2, },
+      "horde": { "noiseThreshold": 70, "sustainSec": 4, "cooldownSec": 30 },
+      "loop": { "tickHz": 60 },
+      "render": { "playerRadiusTiles": 0.35 },
+    }
