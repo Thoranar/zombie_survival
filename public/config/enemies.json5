@@ -13,7 +13,6 @@
       // How often to recompute clustering (seconds)
       "clusterIntervalSec": 0.25,
       // Angular spread around directly-behind (PI rad) for follower slot angles (radians)
-      // Example: 1.6 rad ≈ 91.6° total ±45.8°, 2.51 rad ≈ ±72° (shown below)
       "angleSpreadRad": 2.513,
       // Per-follower radius jitter (multiplicative) [min, max]
       "radiusJitter": { "min": 0.85, "max": 1.25 },
@@ -52,6 +51,7 @@
     // Optional per-type overrides (left empty to use BaseZombie defaults in this pass)
     // Example: "walkTiles": 1.8,
     // Initial spawn count for first pass
-    "initialCount": 10
+    "initialCount": 10,
+    "xpDrop": 6
   }
 }

@@ -8,6 +8,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+export interface ExperienceProgressionConfig {
+  curve?: { base?: number; growth?: number; exponent?: number };
+  maxLevel?: number;
+  orb?: { radiusTiles?: number; attractRadiusTiles?: number; pickupRadiusTiles?: number; speedTilesPerSec?: number };
+  defaultEnemyXpDrop?: number;
+  harvestXpPerUnitDefault?: number;
+  cardPlaceholders?: string[];
+  debugShowNumbers?: boolean;
+}
+
 export interface GameConfig {
   tileSize: number;
   dayNight: { daySec: number; nightSec: number; eclipseSec: number; eclipseEvery: number };
@@ -15,6 +25,7 @@ export interface GameConfig {
   player: { hp: number; walkSpeed: number; crouchSpeed: number; sprintSpeed: number; pushCooldownSec: number; carryCap: number };
   storage: { autoDepositRadius: number };
   horde: { noiseThreshold: number; sustainSec: number; cooldownSec: number };
+  progression?: ExperienceProgressionConfig;
 }
 
 export interface ResourcesConfig {
@@ -22,7 +33,7 @@ export interface ResourcesConfig {
     yield?: string;
     noiseLevel?: number;
     tileAreaTiles?: number;
-    capacityMin: number; capacityMax: number; respawnSecMin: number; respawnSecMax: number; threatWeight: number; nightOnly?: boolean
+    capacityMin: number; capacityMax: number; respawnSecMin: number; respawnSecMax: number; threatWeight: number; nightOnly?: boolean; xpPerUnit?: number
   }>;
   throttles: Record<'Quiet' | 'Normal' | 'Loud', { ratePerSec: number; noisePerSec?: number; clankChancePer5s?: number; clankNoisePulse?: number; clankCapacityPenalty?: number }>;
   weights: Record<string, number>;

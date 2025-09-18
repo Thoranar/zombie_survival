@@ -17,11 +17,14 @@ import { SpawnSystem } from '@core/systems/SpawnSystem';
 import { StorageCrate } from '@core/entities/world/StorageCrate';
 import { Wall } from '@core/entities/world/Wall';
 import { NoiseSystem } from '@core/systems/NoiseSystem';
-import { ZombieSystem, ZombieDamagedEvent } from '@core/systems/ZombieSystem';
+import { ZombieSystem, ZombieDamagedEvent, ZombieKilledEvent } from '@core/systems/ZombieSystem';
 import type { Zombie } from '@core/entities/enemies/Zombie';
 import { ZombieInfoPanel } from '@ui/ZombieInfoPanel';
 import { GameOverOverlay } from '@ui/GameOverOverlay';
 import { CombatTextManager } from '@ui/CombatTextManager';
+import { ExperienceSystem, PlayerExperienceChangedEvent, PlayerLevelUpEvent } from '@core/systems/ExperienceSystem';
+import { ExperienceOverlay } from '@ui/ExperienceOverlay';
+import { LevelUpOverlay } from '@ui/LevelUpOverlay';
 
 // Zombie system removed for refactor: all references stripped
 
@@ -74,6 +77,12 @@ export class GameApp {
   private showZombieTargets = false;
   private showZombieAggro = false;
   private debugMenu!: DebugMenu;
+  private experienceOverlay!: ExperienceOverlay;
+  private levelUpOverlay!: LevelUpOverlay;
+  private experience!: ExperienceSystem;
+  private levelUpQueue: PlayerLevelUpEvent[] = [];
+  private showExperienceNumbers = false;
+  private levelUpPaused = false;
   private startX = 0;
   private startY = 0;
   private currentZoom = 1;
@@ -101,6 +110,8 @@ export class GameApp {
     this.engine.init(this.container);
     const base = import.meta.env.BASE_URL;
     const game = this.cfg.getGame();
+    const progressionCfg = (game as any).progression ?? {};
+    this.showExperienceNumbers = Boolean(progressionCfg?.debugShowNumbers);
     const tickHz = (game as any).loop?.tickHz ?? 60;
     this.stepSec = 1 / tickHz;
     this.loop = new FixedStepLoop(this.stepSec, () => this.update());
@@ -152,6 +163,9 @@ export class GameApp {
     await this.cfg.loadEnemiesConfigBrowser(`${base}config/enemies.json5`);
     this.resources = new ResourceSystem(this.bus, this.cfg);
     this.spawner = new SpawnSystem(this.bus, this.cfg);
+    this.experience = new ExperienceSystem(this.bus, this.cfg);
+    this.experienceOverlay = new ExperienceOverlay(this.container);
+    this.levelUpOverlay = new LevelUpOverlay(this.container);
     this.spawner.setConfig(this.cfg.getSpawn());
     // Spawn storage crates near center/player
     const storageCount = this.spawner.getStorageCount();
@@ -210,6 +224,10 @@ export class GameApp {
     this.bus.on<StructureDamagedEvent>('StructureDamaged', this.onStructureDamaged);
     this.bus.on<StructureDestroyedEvent>('StructureDestroyed', this.onStructureDestroyed);
     this.bus.on<ZombieDamagedEvent>('ZombieDamaged', this.onZombieDamaged);
+    this.bus.on<PlayerExperienceChangedEvent>('PlayerExperienceChanged', this.onExperienceChanged);
+    this.bus.on<PlayerLevelUpEvent>('PlayerLevelUp', this.onPlayerLevelUp);
+    this.bus.on<ZombieKilledEvent>('ZombieKilled', this.onZombieKilled);
+    this.refreshExperienceOverlay();
 
     // Initial spawn on Day 1 across full world (after structures exist), with constraints
     const initialPlanned = this.spawner.planCountsAll();
@@ -319,6 +337,8 @@ export class GameApp {
       this.disableZombieChase = opts.disableChase;
       this.showZombieTargets = opts.showZombieTargets;
       this.showZombieAggro = opts.showZombieAggro;
+      this.showExperienceNumbers = opts.showExperienceNumbers;
+      this.refreshExperienceOverlay();
     });
     this.debugMenu.setShowColliders(this.showColliders);
     this.debugMenu.setShowNoSpawnRadius(this.showNoSpawnRadius);
@@ -328,6 +348,7 @@ export class GameApp {
     this.debugMenu.setShowZombieStates(this.showZombieStates);
     this.debugMenu.setShowZombieTargets(this.showZombieTargets);
     this.debugMenu.setShowZombieAggro(this.showZombieAggro);
+    this.debugMenu.setShowExperienceNumbers(this.showExperienceNumbers);
     this.debugMenu.setShowHordeDebug(this.showHordeDebug);
     this.debugMenu.setDisableChase(this.disableZombieChase);
     this.debugMenu.setOnDamagePlayer(() => this.damagePlayerDebug(10));
@@ -383,7 +404,7 @@ export class GameApp {
   }
 
   private update(): void {
-    if (this.gameOver) return;
+    if (this.gameOver || this.levelUpPaused) return;
     // Player movement & harvest handling
     const move = this.input.getMoveDir();
     const isMoving = move.x !== 0 || move.y !== 0;
@@ -510,7 +531,10 @@ export class GameApp {
         if (this.harvest.progressSec >= actionSec) {
           // complete a single harvest action
           const { harvested, type } = this.resources.harvest(currentNode, actionSec);
-          if (harvested > 0) this.inventory.add(type, harvested);
+          if (harvested > 0) {
+            this.inventory.add(type, harvested);
+            this.experience.grantHarvestExperience(currentNode.archetype, harvested);
+          }
           this.harvest.progressSec = 0;
         }
       }
@@ -644,6 +668,7 @@ export class GameApp {
       zombieObstacles
     );
     this.combat.update(this.stepSec, this.zombies.getZombies(), this.player, this.walls);
+    this.experience.update(this.stepSec, { x: this.player.x, y: this.player.y });
     this.combatText.update(this.stepSec);
     this.hud.setPlayerHealth(this.player.getHp(), this.player.getMaxHp());
   }
@@ -741,6 +766,13 @@ export class GameApp {
       const color = this.selectedNodeId === n.id ? '#d4af37' : baseColor;
       const pct = n.capacity / this.cfg.getResources().nodes[n.archetype].capacityMax;
       (this.engine as any).drawResourceNode(n.x, n.y, n.radiusPx, color, pct);
+    }
+    const orbs = this.experience.getOrbs();
+    if (orbs.length) {
+      const orbRadius = this.experience.getOrbRadiusPx();
+      for (const orb of orbs) {
+        this.engine.drawFilledCircle(orb.x, orb.y, orbRadius, '#fdd835');
+      }
     }
     // Night/Eclipse tint
     const phase = this.time.getPhase();
@@ -1050,6 +1082,35 @@ export class GameApp {
 
   };
 
+
+  private onExperienceChanged = (state: PlayerExperienceChangedEvent): void => {
+    this.experienceOverlay.update(state, this.showExperienceNumbers);
+  };
+
+  private onPlayerLevelUp = (event: PlayerLevelUpEvent): void => {
+    this.levelUpQueue.push(event);
+    this.processLevelUpQueue();
+  };
+
+  private processLevelUpQueue(): void {
+    if (this.levelUpPaused) return;
+    const next = this.levelUpQueue.shift();
+    if (!next) return;
+    this.levelUpPaused = true;
+    this.levelUpOverlay.show(next.cards, (cardId) => {
+      this.experience.applyLevelUpSelection(cardId);
+      this.levelUpPaused = false;
+      this.processLevelUpQueue();
+    });
+  }
+
+  private onZombieKilled = ({ kind, x, y }: ZombieKilledEvent): void => {
+    this.experience.spawnOrbForZombie(kind, x, y);
+  };
+
+  private refreshExperienceOverlay(): void {
+    this.experienceOverlay.update(this.experience.getState(), this.showExperienceNumbers);
+  }
 
   private onZombieDamaged = ({ zombieId, amount, x, y }: ZombieDamagedEvent): void => {
     const dealt = Math.max(0, Math.floor(amount ?? 0));

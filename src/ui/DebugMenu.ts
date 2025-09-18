@@ -9,6 +9,7 @@ export class DebugMenu {
   private collidersCb!: HTMLInputElement;
   private noSpawnCb!: HTMLInputElement;
   private minSepCb!: HTMLInputElement;
+  private xpNumbersCb!: HTMLInputElement;
   private onChange?: (opts: {
     showColliders: boolean;
     showNoSpawnRadius: boolean;
@@ -20,6 +21,7 @@ export class DebugMenu {
     disableChase: boolean;
     showZombieTargets: boolean;
     showZombieAggro: boolean;
+    showExperienceNumbers: boolean;
   }) => void;
   private spawnHordeBtn!: HTMLButtonElement;
   private damagePlayerBtn!: HTMLButtonElement;
@@ -81,6 +83,7 @@ export class DebugMenu {
     const row8 = makeRow('Disable Zombie Chase', (cb) => ((this as any).disableChaseCb = cb));
     const row9 = makeRow('Show Zombie Targets', (cb) => ((this as any).zTargetCb = cb));
     const row10 = makeRow('Show Zombie Aggro Info', (cb) => ((this as any).zAggroCb = cb));
+    const row11 = makeRow('Show XP Numbers', (cb) => (this.xpNumbersCb = cb));
 
     const sep = document.createElement('div');
     sep.style.margin = '6px 0';
@@ -136,6 +139,7 @@ export class DebugMenu {
     root.appendChild(row8);
     root.appendChild(row9);
     root.appendChild(row10);
+    root.appendChild(row11);
     root.appendChild(sep);
     root.appendChild(actions);
     host.appendChild(root);
@@ -160,7 +164,8 @@ export class DebugMenu {
       showHordeDebug: !!hordeDbgCb?.checked,
       disableChase: !!disableChaseCb?.checked,
       showZombieTargets: !!zTargetCb?.checked,
-      showZombieAggro: !!zAggroCb?.checked
+      showZombieAggro: !!zAggroCb?.checked,
+      showExperienceNumbers: !!this.xpNumbersCb?.checked
     });
   }
 
@@ -175,6 +180,7 @@ export class DebugMenu {
     disableChase: boolean;
     showZombieTargets: boolean;
     showZombieAggro: boolean;
+    showExperienceNumbers: boolean;
   }) => void): void {
     this.onChange = handler;
   }
@@ -187,6 +193,7 @@ export class DebugMenu {
   public setShowZombieStates(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).zStateCb; if (n) n.checked = value; }
   public setShowZombieTargets(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).zTargetCb; if (n) n.checked = value; }
   public setShowZombieAggro(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).zAggroCb; if (n) n.checked = value; }
+  public setShowExperienceNumbers(value: boolean): void { if (this.xpNumbersCb) this.xpNumbersCb.checked = value; }
 
   public setOnSpawnHorde(handler: () => void): void { this.onSpawnHorde = handler; }
   public setShowHordeDebug(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).hordeDbgCb; if (n) n.checked = value; }

@@ -50,6 +50,23 @@
     // factor applied to all movement speeds when above carryCap (e.g., 0.5)
     "overCapacitySpeedFactor": 0.5
   },
+  // player progression tuning
+  "progression": {
+    "curve": { "base": 25, "growth": 1.18, "exponent": 1.35 },
+    "maxLevel": 100,
+    "orb": {
+      "radiusTiles": 0.3,
+      "attractRadiusTiles": 3.2,
+      "pickupRadiusTiles": 0.6,
+      "speedTilesPerSec": 9.5
+    },
+    // fallback kill XP when enemy archetype has no override
+    "defaultEnemyXpDrop": 6,
+    // fallback harvest XP per resource unit when node lacks xpPerUnit
+    "harvestXpPerUnitDefault": 0,
+    "cardPlaceholders": ["Power Surge", "Vitality Boost", "Harvest Fortune", "Speed Burst", "Arcane Flow"],
+    "debugShowNumbers": false
+  },
   "storage": { "autoDepositRadius": 2 },
   "horde": { "noiseThreshold": 70, "sustainSec": 4, "cooldownSec": 30 }
 }

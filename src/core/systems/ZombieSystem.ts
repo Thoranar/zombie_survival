@@ -14,6 +14,13 @@ export interface ZombieDamagedEvent {
   y: number;
 }
 
+export interface ZombieKilledEvent {
+  zombieId: string;
+  kind: string;
+  x: number;
+  y: number;
+}
+
 export class ZombieSystem {
   private readonly bus: EventBus;
   private readonly cfg: ConfigService;
@@ -385,12 +392,13 @@ export class ZombieSystem {
   }
 
   private handleZombieDeath(zombie: Zombie): void {
-    this.spawnExperienceOrbPlaceholder(zombie.x, zombie.y);
+    this.bus.emit<ZombieKilledEvent>('ZombieKilled', {
+      zombieId: zombie.id,
+      kind: zombie.kind,
+      x: zombie.x,
+      y: zombie.y
+    });
     this.removeZombieInstance(zombie);
-  }
-
-  private spawnExperienceOrbPlaceholder(_x: number, _y: number): void {
-    // TODO: spawn experience orb for the player to collect
   }
 
   public getZombies(): readonly Zombie[] { return this.zombies; }
