@@ -5,6 +5,15 @@ import type { Zombie } from '../entities/enemies/Zombie';
 
 export type TimePhase = 'day' | 'night' | 'eclipse';
 
+export interface ZombieDamagedEvent {
+  zombieId: string;
+  amount: number;
+  remainingHp: number;
+  killed: boolean;
+  x: number;
+  y: number;
+}
+
 export class ZombieSystem {
   private readonly bus: EventBus;
   private readonly cfg: ConfigService;
@@ -363,7 +372,93 @@ export class ZombieSystem {
 
   // hashSign removed (no orbit swirl)
 
+  private removeZombieInstance(zombie: Zombie): void {
+    const idx = this.zombies.indexOf(zombie);
+    if (idx !== -1) {
+      this.zombies.splice(idx, 1);
+    }
+    this.lastDetectRads = [];
+    this.hordeMap.delete(zombie.id);
+    this.wobble.delete(zombie.id);
+    this.effectiveHorde.delete(zombie.id);
+    this.clusterTimer = 0;
+  }
+
+  private handleZombieDeath(zombie: Zombie): void {
+    this.spawnExperienceOrbPlaceholder(zombie.x, zombie.y);
+    this.removeZombieInstance(zombie);
+  }
+
+  private spawnExperienceOrbPlaceholder(_x: number, _y: number): void {
+    // TODO: spawn experience orb for the player to collect
+  }
+
   public getZombies(): readonly Zombie[] { return this.zombies; }
+
+  public damageZombie(id: string, amount: number): { dealt: number; killed: boolean } {
+    if (amount <= 0) return { dealt: 0, killed: false };
+    const zombie = this.zombies.find((z) => z.id === id);
+    if (!zombie) return { dealt: 0, killed: false };
+    const dealt = zombie.applyDamage(amount);
+    if (dealt <= 0) return { dealt, killed: false };
+    const remainingHp = zombie.getHp();
+    const killed = zombie.isDead();
+    this.bus.emit<ZombieDamagedEvent>('ZombieDamaged', {
+      zombieId: zombie.id,
+      amount: dealt,
+      remainingHp,
+      killed,
+      x: zombie.x,
+      y: zombie.y
+    });
+    if (killed) this.handleZombieDeath(zombie);
+    return { dealt, killed };
+  }
+
+  public healZombie(id: string, amount?: number): number {
+    const zombie = this.zombies.find((z) => z.id === id);
+    if (!zombie) return 0;
+    if (amount == null) {
+      const missing = zombie.getMaxHp() - zombie.getHp();
+      if (missing <= 0) return 0;
+      zombie.resetHealth();
+      return missing;
+    }
+    if (amount <= 0) return 0;
+    return zombie.heal(amount);
+  }
+
+  public damageAllZombies(amount: number): { totalDealt: number; killed: number } {
+    let totalDealt = 0;
+    let killed = 0;
+    if (amount <= 0) return { totalDealt, killed };
+    for (const zombie of [...this.zombies]) {
+      const dealt = zombie.applyDamage(amount);
+      if (dealt <= 0) continue;
+      totalDealt += dealt;
+      const remainingHp = zombie.getHp();
+      const killedThis = zombie.isDead();
+      this.bus.emit<ZombieDamagedEvent>('ZombieDamaged', {
+        zombieId: zombie.id,
+        amount: dealt,
+        remainingHp,
+        killed: killedThis,
+        x: zombie.x,
+        y: zombie.y
+      });
+      if (killedThis) {
+        this.handleZombieDeath(zombie);
+        killed += 1;
+      }
+    }
+    return { totalDealt, killed };
+  }
+
+  public healAllZombies(): void {
+    for (const zombie of this.zombies) {
+      zombie.resetHealth();
+    }
+  }
 
   public getHordeStatus(id: string): { inHorde: boolean; isLeader: boolean; size: number } {
     const eff = this.effectiveHorde.get(id);

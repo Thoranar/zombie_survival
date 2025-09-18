@@ -17,20 +17,13 @@ import { SpawnSystem } from '@core/systems/SpawnSystem';
 import { StorageCrate } from '@core/entities/world/StorageCrate';
 import { Wall } from '@core/entities/world/Wall';
 import { NoiseSystem } from '@core/systems/NoiseSystem';
-import { ZombieSystem } from '@core/systems/ZombieSystem';
+import { ZombieSystem, ZombieDamagedEvent } from '@core/systems/ZombieSystem';
 import type { Zombie } from '@core/entities/enemies/Zombie';
 import { ZombieInfoPanel } from '@ui/ZombieInfoPanel';
 import { GameOverOverlay } from '@ui/GameOverOverlay';
-// Zombie system removed for refactor: all references stripped
+import { CombatTextManager } from '@ui/CombatTextManager';
 
-type DamageIndicator = {
-  id: number;
-  amount: number;
-  age: number;
-  lifetime: number;
-  risePx: number;
-  offsetXPx: number;
-};
+// Zombie system removed for refactor: all references stripped
 
 /**
  * Responsibility: Bootstrap engine, load config, and run fixed-step loop.
@@ -91,8 +84,8 @@ export class GameApp {
   private combat!: CombatSystem;
   private gameOverOverlay!: GameOverOverlay;
   private gameOver = false;
-  private damageIndicators: DamageIndicator[] = [];
-  private damageIdSeq = 0;
+  private combatText: CombatTextManager;
+
 
   constructor(engine: IEngineAdapter, bus: EventBus, cfg: ConfigService, container: HTMLElement) {
     this.engine = engine;
@@ -100,6 +93,8 @@ export class GameApp {
     this.cfg = cfg;
     this.container = container;
     this.overlay = new DebugOverlay(container);
+    this.combatText = new CombatTextManager();
+
   }
 
   public async start(): Promise<void> {
@@ -214,6 +209,8 @@ export class GameApp {
     this.bus.on<PlayerDiedEvent>('PlayerDied', this.onPlayerDied);
     this.bus.on<StructureDamagedEvent>('StructureDamaged', this.onStructureDamaged);
     this.bus.on<StructureDestroyedEvent>('StructureDestroyed', this.onStructureDestroyed);
+    this.bus.on<ZombieDamagedEvent>('ZombieDamaged', this.onZombieDamaged);
+
     // Initial spawn on Day 1 across full world (after structures exist), with constraints
     const initialPlanned = this.spawner.planCountsAll();
     const colls: Array<{ x: number; y: number; hw: number; hh: number }> = [];
@@ -333,6 +330,12 @@ export class GameApp {
     this.debugMenu.setShowZombieAggro(this.showZombieAggro);
     this.debugMenu.setShowHordeDebug(this.showHordeDebug);
     this.debugMenu.setDisableChase(this.disableZombieChase);
+    this.debugMenu.setOnDamagePlayer(() => this.damagePlayerDebug(10));
+    this.debugMenu.setOnHealPlayer(() => this.healPlayerDebug(10));
+    this.debugMenu.setOnDamageStructures(() => this.damageStructuresDebug(25));
+    this.debugMenu.setOnHealStructures(() => this.healStructuresDebug(25));
+    this.debugMenu.setOnDamageZombies(() => this.damageZombiesDebug(15));
+    this.debugMenu.setOnHealZombies(() => this.healZombiesDebug(20));
     this.debugMenu.setOnSpawnHorde(() => {
       const tile = this.cfg.getGame().tileSize;
       const cx = this.player.x + tile * 4;
@@ -641,7 +644,7 @@ export class GameApp {
       zombieObstacles
     );
     this.combat.update(this.stepSec, this.zombies.getZombies(), this.player, this.walls);
-    this.updateDamageIndicators(this.stepSec);
+    this.combatText.update(this.stepSec);
     this.hud.setPlayerHealth(this.player.getHp(), this.player.getMaxHp());
   }
 
@@ -652,13 +655,16 @@ export class GameApp {
     this.engine.setCameraCenter(this.player.x, this.player.y);
     this.engine.drawGrid(tileSize);
     this.engine.drawPlayer(this.player.x, this.player.y, tileSize * playerRadiusTiles);
-    const hpRatio = this.player.getMaxHp() > 0 ? Math.max(0, Math.min(1, this.player.getHp() / this.player.getMaxHp())) : 0;
-    const hpWidth = Math.max(36, tileSize * this.currentZoom * 1.3);
-    const hpHeight = Math.max(4, 6 * this.currentZoom);
-    const hpOffset = tileSize * this.currentZoom * 0.9;
-    const hpColor = hpRatio > 0.5 ? '#66bb6a' : hpRatio > 0.25 ? '#ffa726' : '#ef5350';
-    this.engine.drawHorizontalBar(this.player.x, this.player.y, hpWidth, hpHeight, hpRatio, hpOffset, { fill: hpColor });
-    this.renderDamageIndicators(tileSize);
+    const playerMaxHp = this.player.getMaxHp();
+    const playerHp = this.player.getHp();
+    if (playerMaxHp > 0 && playerHp < playerMaxHp) {
+      const hpRatio = Math.max(0, Math.min(1, playerHp / playerMaxHp));
+      const hpWidth = Math.max(36, tileSize * this.currentZoom * 1.3);
+      const hpHeight = Math.max(4, 6 * this.currentZoom);
+      const hpOffset = tileSize * this.currentZoom * 0.9;
+      const hpColor = hpRatio > 0.5 ? '#66bb6a' : hpRatio > 0.25 ? '#ffa726' : '#ef5350';
+      this.engine.drawHorizontalBar(this.player.x, this.player.y, hpWidth, hpHeight, hpRatio, hpOffset, { fill: hpColor });
+    }
     // Harvest progress (draw above the active node, above its capacity bar)
     if (this.harvest.active) {
       const progress01 = Math.max(
@@ -679,7 +685,7 @@ export class GameApp {
     for (const w of this.walls) {
       const selected = this.selectedWallId === w.id;
       this.engine.drawWall(w.x, w.y, w.widthPx, w.type, selected, w.isOpen);
-      if (w.maxHp > 0) {
+      if (w.maxHp > 0 && w.hp < w.maxHp) {
         const ratio = Math.max(0, Math.min(1, w.hp / w.maxHp));
         const barWidth = Math.max(18, w.widthPx * this.currentZoom * 0.9);
         const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
@@ -752,6 +758,17 @@ export class GameApp {
     const phaseScale = phase === 'eclipse' ? detectScale.eclipse : phase === 'night' ? detectScale.night : detectScale.day;
     for (const z of this.zombies.getZombies()) {
       (this.engine as any).drawFilledCircle(z.x, z.y, zRadius, z.id === this.selectedZombieId ? '#ff6e6e' : zColor);
+
+      const zMaxHp = typeof (z as any).getMaxHp === 'function' ? (z as any).getMaxHp() : z.stats.hp;
+      const zHp = typeof (z as any).getHp === 'function' ? (z as any).getHp() : z.stats.hp;
+      if (zMaxHp > 0 && zHp < zMaxHp) {
+        const ratio = Math.max(0, Math.min(1, zHp / zMaxHp));
+        const barWidth = this.cfg.getGame().tileSize;
+        const barHeight = Math.max(3, 4 * this.currentZoom);
+        const barOffset = zRadius + barHeight + 4;
+        this.engine.drawHorizontalBar(z.x, z.y, barWidth, barHeight, ratio, barOffset, { fill: this.getHealthBarColor(ratio) });
+      }
+
       if (this.showZombieDetect) {
         const r = (z as any).stats.detectRadiusTiles * this.cfg.getGame().tileSize * phaseScale;
         this.engine.drawCircleOutline(z.x, z.y, r, '#e57373');
@@ -816,6 +833,7 @@ export class GameApp {
       }
     }
     // Refresh info panel for selected zombie
+    this.combatText.render(this.engine);
     this.updateZombieInfoPanel();
   }
 
@@ -849,23 +867,152 @@ export class GameApp {
     return true;
   }
 
-  private onStructureDamaged = ({ structureId, remainingHp }: StructureDamagedEvent): void => {
+  private getHealthBarColor(ratio: number): string {
+    if (!Number.isFinite(ratio)) return '#e57373';
+    return ratio > 0.66 ? '#81c784' : ratio > 0.33 ? '#ffb74d' : '#e57373';
+  }
 
+  private damagePlayerDebug(amount: number): void {
+    if (amount <= 0) return;
+    const dealt = this.player.applyDamage(amount);
+    if (dealt <= 0) return;
+    this.hud.setPlayerHealth(this.player.getHp(), this.player.getMaxHp());
+    this.bus.emit<PlayerDamagedEvent>('PlayerDamaged', {
+      zombieId: 'debug-tools',
+      amount: dealt,
+      remainingHp: this.player.getHp()
+    });
+    if (this.player.isDead()) {
+      this.bus.emit<PlayerDiedEvent>('PlayerDied', { killerId: 'debug-tools' });
+    }
+  }
+
+  private healPlayerDebug(amount: number): void {
+    if (amount <= 0) return;
+    const healed = this.player.heal(amount);
+    if (healed <= 0) return;
+    const tile = this.cfg.getGame().tileSize;
+    const display = Math.max(1, Math.round(healed));
+    this.hud.setPlayerHealth(this.player.getHp(), this.player.getMaxHp());
+    this.combatText.spawn({
+      text: `+${display}`,
+      color: '#81c784',
+      lifetimeSec: 1.6,
+      risePx: tile * 1.2,
+      spreadXPx: tile * 0.25,
+      baseYOffsetPx: tile * 1.1,
+      getPosition: () => ({ x: this.player.x, y: this.player.y })
+    });
+  }
+
+  private damageStructuresDebug(amount: number): void {
+    if (amount <= 0) return;
+    const attackerId = 'debug-tools';
+    for (const wall of this.walls) {
+      if (!wall.playerBuilt) continue;
+      if (wall.hp <= 0) continue;
+      const originalHp = wall.hp;
+      const newHp = Math.max(0, originalHp - amount);
+      if (newHp === originalHp) continue;
+      wall.hp = newHp;
+      const dealt = originalHp - newHp;
+      this.bus.emit<StructureDamagedEvent>('StructureDamaged', {
+        structureId: wall.id,
+        attackerId,
+        amount: dealt,
+        remainingHp: wall.hp
+      });
+      if (wall.hp <= 0) {
+        this.bus.emit<StructureDestroyedEvent>('StructureDestroyed', { structureId: wall.id, attackerId });
+      }
+    }
+  }
+
+  private healStructuresDebug(amount: number): void {
+    if (amount <= 0) return;
+    const tile = this.cfg.getGame().tileSize;
+    for (const wall of this.walls) {
+      if (!wall.playerBuilt) continue;
+      if (wall.hp >= wall.maxHp) continue;
+      const originalHp = wall.hp;
+      wall.hp = Math.min(wall.maxHp, wall.hp + amount);
+      const restored = wall.hp - originalHp;
+      if (restored <= 0) continue;
+      if (this.selectedWallId === wall.id) {
+        const salvage = this.makeWallSalvage(wall);
+        this.nodePanel?.setWall(wall, salvage);
+      }
+      const baseOffset = (wall.heightPx / 2) + Math.max(12, tile * 0.3);
+      const spread = Math.max(tile * 0.2, wall.widthPx * 0.25);
+      this.combatText.spawn({
+        text: `+${Math.max(1, Math.round(restored))}`,
+        color: '#81c784',
+        lifetimeSec: 1.4,
+        risePx: tile,
+        spreadXPx: spread,
+        baseYOffsetPx: baseOffset,
+        getPosition: () => ({ x: wall.x, y: wall.y })
+      });
+    }
+  }
+
+  private damageZombiesDebug(amount: number): void {
+    if (amount <= 0) return;
+    const result = this.zombies.damageAllZombies(amount);
+    if (result.killed > 0 && this.selectedZombieId) {
+      const stillExists = this.zombies.getZombies().some((z) => z.id === this.selectedZombieId);
+      if (!stillExists) this.selectedZombieId = null;
+    }
+    this.updateZombieInfoPanel();
+  }
+
+  private healZombiesDebug(amount: number): void {
+    if (amount <= 0) return;
+    const tile = this.cfg.getGame().tileSize;
+    for (const zombie of this.zombies.getZombies()) {
+      const healed = this.zombies.healZombie(zombie.id, amount);
+      if (healed <= 0) continue;
+      this.combatText.spawn({
+        text: `+${Math.max(1, Math.round(healed))}`,
+        color: '#a5d6a7',
+        lifetimeSec: 1.2,
+        risePx: tile * 0.9,
+        spreadXPx: tile * 0.35,
+        baseYOffsetPx: tile * 0.9,
+        getPosition: () => ({ x: zombie.x, y: zombie.y })
+      });
+    }
+    this.updateZombieInfoPanel();
+  }
+  private onStructureDamaged = ({ structureId, amount, remainingHp }: StructureDamagedEvent): void => {
     const wall = this.walls.find((w) => w.id === structureId);
-
     if (!wall) return;
 
     wall.hp = Math.max(0, remainingHp);
 
     if (this.selectedWallId === structureId) {
-
       const salvage = this.makeWallSalvage(wall);
-
       this.nodePanel?.setWall(wall, salvage);
-
     }
 
+    const dealt = Math.max(0, Math.floor(amount ?? 0));
+    if (dealt > 0) {
+      const tile = this.cfg.getGame().tileSize;
+      const baseOffset = (wall.heightPx / 2) + Math.max(12, tile * 0.3);
+      const spread = Math.max(tile * 0.2, wall.widthPx * 0.25);
+      this.combatText.spawn({
+        text: `-${dealt}`,
+        color: '#ff8a65',
+        lifetimeSec: 1.6,
+        risePx: tile,
+        spreadXPx: spread,
+        baseYOffsetPx: baseOffset,
+        getPosition: () => ({ x: wall.x, y: wall.y })
+      });
+    }
   };
+
+
 
 
 
@@ -904,47 +1051,44 @@ export class GameApp {
   };
 
 
+  private onZombieDamaged = ({ zombieId, amount, x, y }: ZombieDamagedEvent): void => {
+    const dealt = Math.max(0, Math.floor(amount ?? 0));
+    if (dealt <= 0) return;
+    const tile = this.cfg.getGame().tileSize;
+    const zombie = this.zombies.getZombies().find((z) => z.id === zombieId) ?? null;
+    this.combatText.spawn({
+      text: `-${dealt}`,
+      color: '#ef5350',
+      lifetimeSec: 1.5,
+      risePx: tile,
+      spreadXPx: tile * 0.35,
+      baseYOffsetPx: tile * 0.9,
+      getPosition: zombie ? () => ({ x: zombie.x, y: zombie.y }) : undefined,
+      position: zombie ? undefined : { x, y }
+    });
+  };
+
+
+
+
 
   private onPlayerDamaged = ({ amount }: PlayerDamagedEvent): void => {
     if (this.gameOver) return;
     const dealt = Math.max(0, Math.floor(amount ?? 0));
     if (dealt <= 0) return;
     const tile = this.cfg.getGame().tileSize;
-    const lifetime = 2.0;
-    const risePx = tile * 1.2;
-    const spread = tile * 0.25;
-    const indicator: DamageIndicator = {
-      id: this.damageIdSeq += 1,
-      amount: dealt,
-      age: 0,
-      lifetime,
-      risePx,
-      offsetXPx: (Math.random() * 2 - 1) * spread
-    };
-    this.damageIndicators.push(indicator);
+    this.combatText.spawn({
+      text: `-${dealt}`,
+      color: '#ff6060',
+      lifetimeSec: 2.0,
+      risePx: tile * 1.2,
+      spreadXPx: tile * 0.25,
+      baseYOffsetPx: tile * 1.1,
+      getPosition: () => ({ x: this.player.x, y: this.player.y })
+    });
   };
 
-  private updateDamageIndicators(dtSec: number): void {
-    if (!this.damageIndicators.length) return;
-    this.damageIndicators = this.damageIndicators.filter((d) => {
-      d.age += dtSec;
-      return d.age < d.lifetime;
-    });
-  }
 
-  private renderDamageIndicators(tileSize: number): void {
-    if (!this.damageIndicators.length) return;
-    const baseOffset = tileSize * 1.1;
-    for (const d of this.damageIndicators) {
-      const progress = Math.min(1, Math.max(0, d.age / d.lifetime));
-      const rise = d.risePx * progress;
-      const alpha = Math.max(0, 1 - progress);
-      const color = `rgba(255, 96, 96, ${alpha.toFixed(2)})`;
-      const x = this.player.x + d.offsetXPx;
-      const y = this.player.y - baseOffset - rise;
-      this.engine.drawTextWorld(x, y, `-${d.amount}`, color);
-    }
-  }
 
   private onPlayerDied = ({ killerId }: PlayerDiedEvent): void => {
     if (this.gameOver) return;
@@ -957,7 +1101,7 @@ export class GameApp {
     window.removeEventListener('keydown', this.onZoomKey);
     this.hintTimer = 0;
     this.hud.setHint('');
-    this.damageIndicators.length = 0;
+    this.combatText.clear();
     this.gameOverOverlay.show(killerId);
   };
 
@@ -996,6 +1140,18 @@ export class GameApp {
 
   // Zombies removed: no spawning helpers
 }
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

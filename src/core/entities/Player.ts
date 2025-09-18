@@ -54,6 +54,14 @@ export class Player extends Actor {
     this.hp = Math.max(0, this.hp - dmg);
     return before - this.hp;
   }
+  public heal(amount: number): number {
+    if (amount <= 0 || this.hp >= this.maxHp) return 0;
+    const healAmt = Math.max(0, amount);
+    const before = this.hp;
+    this.hp = Math.min(this.maxHp, this.hp + healAmt);
+    return this.hp - before;
+  }
+
 
   public isDead(): boolean {
     return this.hp <= 0;
@@ -63,3 +71,4 @@ export class Player extends Actor {
     this.hp = this.maxHp;
   }
 }
+

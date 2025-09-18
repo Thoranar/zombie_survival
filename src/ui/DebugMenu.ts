@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Responsibility: Minimal debug menu with toggles (e.g., show colliders).
  * Publishes: none
  * Subscribes: DOM click input
@@ -9,9 +9,32 @@ export class DebugMenu {
   private collidersCb!: HTMLInputElement;
   private noSpawnCb!: HTMLInputElement;
   private minSepCb!: HTMLInputElement;
-  private onChange?: (opts: { showColliders: boolean; showNoSpawnRadius: boolean; showMinSeparation: boolean; showNoise: boolean; showZombieDetect: boolean; showZombieStates: boolean; showHordeDebug: boolean; disableChase: boolean; showZombieTargets: boolean; showZombieAggro: boolean }) => void;
+  private onChange?: (opts: {
+    showColliders: boolean;
+    showNoSpawnRadius: boolean;
+    showMinSeparation: boolean;
+    showNoise: boolean;
+    showZombieDetect: boolean;
+    showZombieStates: boolean;
+    showHordeDebug: boolean;
+    disableChase: boolean;
+    showZombieTargets: boolean;
+    showZombieAggro: boolean;
+  }) => void;
   private spawnHordeBtn!: HTMLButtonElement;
+  private damagePlayerBtn!: HTMLButtonElement;
+  private healPlayerBtn!: HTMLButtonElement;
+  private damageStructuresBtn!: HTMLButtonElement;
+  private healStructuresBtn!: HTMLButtonElement;
+  private damageZombiesBtn!: HTMLButtonElement;
+  private healZombiesBtn!: HTMLButtonElement;
   private onSpawnHorde?: () => void;
+  private onDamagePlayer?: () => void;
+  private onHealPlayer?: () => void;
+  private onDamageStructures?: () => void;
+  private onHealStructures?: () => void;
+  private onDamageZombies?: () => void;
+  private onHealZombies?: () => void;
 
   constructor(host: HTMLElement) {
     const root = document.createElement('div');
@@ -68,13 +91,40 @@ export class DebugMenu {
     actions.style.display = 'flex';
     actions.style.flexDirection = 'column';
     actions.style.gap = '6px';
-    const spawnBtn = document.createElement('button');
-    spawnBtn.textContent = 'Spawn Horde (3)';
-    spawnBtn.style.cursor = 'pointer';
-    spawnBtn.style.font = '12px monospace';
-    spawnBtn.onclick = () => this.onSpawnHorde?.();
+
+    const makeActionButton = (label: string, handler: () => void): HTMLButtonElement => {
+      const btn = document.createElement('button');
+      btn.textContent = label;
+      btn.style.cursor = 'pointer';
+      btn.style.font = '12px monospace';
+      btn.onclick = handler;
+      return btn;
+    };
+
+    const spawnBtn = makeActionButton('Spawn Horde (3)', () => this.onSpawnHorde?.());
+    const damagePlayerBtn = makeActionButton('Damage Player', () => this.onDamagePlayer?.());
+    const healPlayerBtn = makeActionButton('Heal Player', () => this.onHealPlayer?.());
+    const damageStructuresBtn = makeActionButton('Damage Structures', () => this.onDamageStructures?.());
+    const healStructuresBtn = makeActionButton('Repair Structures', () => this.onHealStructures?.());
+    const damageZombiesBtn = makeActionButton('Damage Zombies', () => this.onDamageZombies?.());
+    const healZombiesBtn = makeActionButton('Heal Zombies', () => this.onHealZombies?.());
+
     actions.appendChild(spawnBtn);
+    actions.appendChild(damagePlayerBtn);
+    actions.appendChild(healPlayerBtn);
+    actions.appendChild(damageStructuresBtn);
+    actions.appendChild(healStructuresBtn);
+    actions.appendChild(damageZombiesBtn);
+    actions.appendChild(healZombiesBtn);
+
     this.spawnHordeBtn = spawnBtn;
+    this.damagePlayerBtn = damagePlayerBtn;
+    this.healPlayerBtn = healPlayerBtn;
+    this.damageStructuresBtn = damageStructuresBtn;
+    this.healStructuresBtn = healStructuresBtn;
+    this.damageZombiesBtn = damageZombiesBtn;
+    this.healZombiesBtn = healZombiesBtn;
+
     root.appendChild(title);
     root.appendChild(row1);
     root.appendChild(row2);
@@ -114,7 +164,18 @@ export class DebugMenu {
     });
   }
 
-  public setOnChange(handler: (opts: { showColliders: boolean; showNoSpawnRadius: boolean; showMinSeparation: boolean; showNoise: boolean; showZombieDetect: boolean; showZombieStates: boolean; showHordeDebug: boolean; disableChase: boolean; showZombieTargets: boolean; showZombieAggro: boolean }) => void): void {
+  public setOnChange(handler: (opts: {
+    showColliders: boolean;
+    showNoSpawnRadius: boolean;
+    showMinSeparation: boolean;
+    showNoise: boolean;
+    showZombieDetect: boolean;
+    showZombieStates: boolean;
+    showHordeDebug: boolean;
+    disableChase: boolean;
+    showZombieTargets: boolean;
+    showZombieAggro: boolean;
+  }) => void): void {
     this.onChange = handler;
   }
 
@@ -130,4 +191,11 @@ export class DebugMenu {
   public setOnSpawnHorde(handler: () => void): void { this.onSpawnHorde = handler; }
   public setShowHordeDebug(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).hordeDbgCb; if (n) n.checked = value; }
   public setDisableChase(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).disableChaseCb; if (n) n.checked = value; }
+  public setOnDamagePlayer(handler: () => void): void { this.onDamagePlayer = handler; }
+  public setOnHealPlayer(handler: () => void): void { this.onHealPlayer = handler; }
+  public setOnDamageStructures(handler: () => void): void { this.onDamageStructures = handler; }
+  public setOnHealStructures(handler: () => void): void { this.onHealStructures = handler; }
+  public setOnDamageZombies(handler: () => void): void { this.onDamageZombies = handler; }
+  public setOnHealZombies(handler: () => void): void { this.onHealZombies = handler; }
 }
+

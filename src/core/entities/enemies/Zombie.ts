@@ -1,4 +1,4 @@
-import { Actor } from '../../entities/Actor';
+﻿import { Actor } from '../../entities/Actor';
 import { segmentIntersectsAABB } from '../../math/Geometry';
 
 
@@ -55,6 +55,10 @@ interface ZombieCollider {
 
   type?: 'Wall' | 'Door';
 
+  playerBuilt?: boolean;
+
+  structureKind?: 'door' | 'wall' | 'offense';
+
 }
 
 
@@ -95,6 +99,9 @@ export class Zombie extends Actor {
 
   public readonly stats: Required<Omit<ZombieStats, 'attackRangeTiles'>> & { attackRangeTiles: number };
 
+  private readonly maxHp: number;
+  private hp: number;
+
   private roamTarget: { x: number; y: number } | null = null;
 
   private roamTimer = 0;
@@ -118,9 +125,11 @@ export class Zombie extends Actor {
 
     const attackRangeTiles = typeof stats.attackRangeTiles === 'number' ? stats.attackRangeTiles : 0.7;
 
+    const safeHp = Math.max(1, Math.floor(stats.hp));
+
     this.stats = {
 
-      hp: stats.hp,
+      hp: safeHp,
 
       walkTiles: stats.walkTiles,
 
@@ -135,6 +144,9 @@ export class Zombie extends Actor {
       attackRangeTiles
 
     };
+
+    this.maxHp = safeHp;
+    this.hp = safeHp;
 
     this.setSpeedsTiles(stats.walkTiles, stats.walkTiles, stats.sprintTiles);
 
@@ -640,9 +652,40 @@ export class Zombie extends Actor {
 
 
 
+
+  public getHp(): number { return this.hp; }
+
+  public getMaxHp(): number { return this.maxHp; }
+
+  public applyDamage(amount: number): number {
+    if (amount <= 0 || this.hp <= 0) return 0;
+    const dmg = Math.max(0, amount);
+    const before = this.hp;
+    this.hp = Math.max(0, this.hp - dmg);
+    return before - this.hp;
+  }
+
+  public heal(amount: number): number {
+    if (amount <= 0 || this.hp >= this.maxHp) return 0;
+    const healAmt = Math.max(0, amount);
+    const before = this.hp;
+    this.hp = Math.min(this.maxHp, this.hp + healAmt);
+    return this.hp - before;
+  }
+
+  public resetHealth(): void {
+    this.hp = this.maxHp;
+  }
+
+  public isDead(): boolean {
+    return this.hp <= 0;
+  }
+
   public getIdleSecLeft(): number { return Math.max(0, this.idleSecLeft); }
 
 }
+
+
 
 
 
