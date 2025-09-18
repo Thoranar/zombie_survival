@@ -9,7 +9,7 @@ export class DebugMenu {
   private collidersCb!: HTMLInputElement;
   private noSpawnCb!: HTMLInputElement;
   private minSepCb!: HTMLInputElement;
-  private onChange?: (opts: { showColliders: boolean; showNoSpawnRadius: boolean; showMinSeparation: boolean; showNoise: boolean; showZombieDetect: boolean; showZombieStates: boolean; showHordeDebug: boolean; disableChase: boolean }) => void;
+  private onChange?: (opts: { showColliders: boolean; showNoSpawnRadius: boolean; showMinSeparation: boolean; showNoise: boolean; showZombieDetect: boolean; showZombieStates: boolean; showHordeDebug: boolean; disableChase: boolean; showZombieTargets: boolean; showZombieAggro: boolean }) => void;
   private spawnHordeBtn!: HTMLButtonElement;
   private onSpawnHorde?: () => void;
 
@@ -56,6 +56,8 @@ export class DebugMenu {
     const row6 = makeRow('Show Zombie State Labels', (cb) => ((this as any).zStateCb = cb));
     const row7 = makeRow('Show Horde Debug', (cb) => ((this as any).hordeDbgCb = cb));
     const row8 = makeRow('Disable Zombie Chase', (cb) => ((this as any).disableChaseCb = cb));
+    const row9 = makeRow('Show Zombie Targets', (cb) => ((this as any).zTargetCb = cb));
+    const row10 = makeRow('Show Zombie Aggro Info', (cb) => ((this as any).zAggroCb = cb));
 
     const sep = document.createElement('div');
     sep.style.margin = '6px 0';
@@ -82,6 +84,8 @@ export class DebugMenu {
     root.appendChild(row6);
     root.appendChild(row7);
     root.appendChild(row8);
+    root.appendChild(row9);
+    root.appendChild(row10);
     root.appendChild(sep);
     root.appendChild(actions);
     host.appendChild(root);
@@ -94,6 +98,8 @@ export class DebugMenu {
     const zStateCb: HTMLInputElement | undefined = (this as any).zStateCb;
     const hordeDbgCb: HTMLInputElement | undefined = (this as any).hordeDbgCb;
     const disableChaseCb: HTMLInputElement | undefined = (this as any).disableChaseCb;
+    const zTargetCb: HTMLInputElement | undefined = (this as any).zTargetCb;
+    const zAggroCb: HTMLInputElement | undefined = (this as any).zAggroCb;
     this.onChange?.({
       showColliders: !!this.collidersCb?.checked,
       showNoSpawnRadius: !!this.noSpawnCb?.checked,
@@ -102,11 +108,13 @@ export class DebugMenu {
       showZombieDetect: !!zDetectCb?.checked,
       showZombieStates: !!zStateCb?.checked,
       showHordeDebug: !!hordeDbgCb?.checked,
-      disableChase: !!disableChaseCb?.checked
+      disableChase: !!disableChaseCb?.checked,
+      showZombieTargets: !!zTargetCb?.checked,
+      showZombieAggro: !!zAggroCb?.checked
     });
   }
 
-  public setOnChange(handler: (opts: { showColliders: boolean; showNoSpawnRadius: boolean; showMinSeparation: boolean; showNoise: boolean; showZombieDetect: boolean; showZombieStates: boolean; showHordeDebug: boolean; disableChase: boolean }) => void): void {
+  public setOnChange(handler: (opts: { showColliders: boolean; showNoSpawnRadius: boolean; showMinSeparation: boolean; showNoise: boolean; showZombieDetect: boolean; showZombieStates: boolean; showHordeDebug: boolean; disableChase: boolean; showZombieTargets: boolean; showZombieAggro: boolean }) => void): void {
     this.onChange = handler;
   }
 
@@ -116,6 +124,8 @@ export class DebugMenu {
   public setShowNoise(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).noiseCb; if (n) n.checked = value; }
   public setShowZombieDetect(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).zDetectCb; if (n) n.checked = value; }
   public setShowZombieStates(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).zStateCb; if (n) n.checked = value; }
+  public setShowZombieTargets(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).zTargetCb; if (n) n.checked = value; }
+  public setShowZombieAggro(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).zAggroCb; if (n) n.checked = value; }
 
   public setOnSpawnHorde(handler: () => void): void { this.onSpawnHorde = handler; }
   public setShowHordeDebug(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).hordeDbgCb; if (n) n.checked = value; }

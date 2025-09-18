@@ -57,7 +57,7 @@ export class NodePanel {
       const stats = document.createElement('div');
       stats.style.marginTop = '4px';
       const salvTxt = salvage ? Object.entries(salvage).map(([k, v]) => `${k}:${Math.floor(v)}`).join(' ') : 'N/A';
-      stats.textContent = `HP: ${Math.floor(this.wall.hp)}  |  Salvage: ${salvTxt}`;
+      stats.textContent = `HP: ${Math.floor(this.wall.hp)}  |  Salvage: ${salvTxt}  |  PlayerBuilt: ${this.wall.playerBuilt ? 'Yes' : 'No'}`;
       this.root.appendChild(stats);
       return;
     }

@@ -9,6 +9,7 @@ export class HUD {
   private readonly dayEl: HTMLSpanElement;
   private readonly phaseEl: HTMLSpanElement;
   private readonly timeEl: HTMLSpanElement;
+  private readonly healthEl: HTMLSpanElement;
   private readonly noiseEl: HTMLSpanElement;
   private readonly carriedEl: HTMLDivElement;
   private readonly storedEl: HTMLDivElement;
@@ -37,6 +38,7 @@ export class HUD {
     [, this.dayEl] = line('Day:');
     [, this.phaseEl] = line('Phase:');
     [, this.timeEl] = line('Time:');
+    [, this.healthEl] = line('Health:');
     [, this.noiseEl] = line('Noise:');
     const carriedRow = document.createElement('div');
     carriedRow.style.marginTop = '6px';
@@ -78,6 +80,12 @@ export class HUD {
     const s = Math.max(0, Math.floor(sec % 60));
     const m = Math.max(0, Math.floor(sec / 60));
     this.timeEl.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+  }
+
+  public setPlayerHealth(current: number, max: number): void {
+    const cur = Math.max(0, Math.floor(current));
+    const cap = Math.max(0, Math.floor(max));
+    this.healthEl.textContent = `${cur}/${cap}`;
   }
 
   public setNoiseStub(value: number): void {

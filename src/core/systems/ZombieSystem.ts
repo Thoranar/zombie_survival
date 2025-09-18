@@ -83,7 +83,8 @@ export class ZombieSystem {
     dtSec: number,
     player: { x: number; y: number },
     phase: TimePhase,
-    detectCtx: { noiseRadiusPx: number; playerRadiusPx: number; disableChase?: boolean }
+    detectCtx: { noiseRadiusPx: number; playerRadiusPx: number; disableChase?: boolean },
+    obstacles?: Array<{ x: number; y: number; hw: number; hh: number; kind?: 'wall' | 'node'; id?: string; type?: 'Wall' | 'Door' }>
   ): void {
     const scale = phase === 'eclipse' ? this.detectScale.eclipse : phase === 'night' ? this.detectScale.night : this.detectScale.day;
     const tile = this.cfg.getGame().tileSize;
@@ -98,6 +99,9 @@ export class ZombieSystem {
     const idleModel = (((this.cfg.getEnemies() as any).globals?.idleModel) ?? {}) as any;
     const phaseKey = phase === 'eclipse' ? 'eclipse' : phase === 'night' ? 'night' : 'day';
     const idlePhaseCfg = idleModel[phaseKey] ?? { idleMinSec: 3, idleMaxSec: 7, soloMoveMinTiles: 8, soloMoveMaxTiles: 16, leaderMoveMinTiles: 40, leaderMoveMaxTiles: 60 };
+
+    const colliders = obstacles ?? [];
+    const avoidPadding = tile * 0.6;
 
     // Current detect radius per zombie (for overlap-based horde grouping)
     const detectRads = this.zombies.map((z: any) => (z.stats.detectRadiusTiles ?? 0) * tile * scale);
@@ -174,6 +178,44 @@ export class ZombieSystem {
       const speedFactor = effectiveInHorde && !isChasing ? Math.max(0.4, Math.pow(speedBase, Math.max(0, size - 1))) : 1.0;
       z.setSpeedFactor(speedFactor);
 
+      let avoidX = 0;
+      let avoidY = 0;
+      if (colliders.length) {
+        const radius = typeof (z as any).getCollisionRadius === 'function' ? (z as any).getCollisionRadius() : tile * 0.3;
+        const avoidRange = radius + avoidPadding;
+        for (const ob of colliders) {
+          const dxC = z.x - ob.x;
+          const dyC = z.y - ob.y;
+          const overlapX = (ob.hw + radius) - Math.abs(dxC);
+          const overlapY = (ob.hh + radius) - Math.abs(dyC);
+          if (overlapX > 0 && overlapY > 0) {
+            if (overlapX < overlapY) {
+              const dir = dxC >= 0 ? 1 : -1;
+              avoidX += dir * (overlapX / Math.max(radius, 1e-3));
+            } else {
+              const dir = dyC >= 0 ? 1 : -1;
+              avoidY += dir * (overlapY / Math.max(radius, 1e-3));
+            }
+            continue;
+          }
+          const nearestX = Math.max(ob.x - ob.hw, Math.min(z.x, ob.x + ob.hw));
+          const nearestY = Math.max(ob.y - ob.hh, Math.min(z.y, ob.y + ob.hh));
+          const diffX = z.x - nearestX;
+          const diffY = z.y - nearestY;
+          const dist = Math.hypot(diffX, diffY);
+          if (dist < avoidRange && dist > 1e-5) {
+            const strength = (avoidRange - dist) / avoidRange;
+            avoidX += (diffX / dist) * strength;
+            avoidY += (diffY / dist) * strength;
+          }
+        }
+        const avoidMag = Math.hypot(avoidX, avoidY);
+        if (avoidMag > 1.5) {
+          const scale = 1.5 / avoidMag;
+          avoidX *= scale;
+          avoidY *= scale;
+        }
+      }
       let biasX = 0, biasY = 0;
       let pursueX: number | undefined;
       let pursueY: number | undefined;
@@ -250,6 +292,9 @@ export class ZombieSystem {
         desiredDistPx,
         biasX,
         biasY,
+        avoidX,
+        avoidY,
+        colliders,
         pursueX,
         pursueY,
         forceChase,

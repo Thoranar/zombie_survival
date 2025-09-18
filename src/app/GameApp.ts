@@ -1,4 +1,4 @@
-import { IEngineAdapter } from './EngineAdapter';
+﻿import { IEngineAdapter } from './EngineAdapter';
 import { EventBus } from './EventBus';
 import { FixedStepLoop } from './FixedStepLoop';
 import { ConfigService } from '@core/data/ConfigService';
@@ -10,6 +10,7 @@ import { HUD } from '@ui/HUD';
 import { DebugMenu } from '@ui/DebugMenu';
 import { NodePanel } from '@ui/NodePanel';
 import { ResourceSystem } from '@core/systems/ResourceSystem';
+import { CombatSystem, PlayerDamagedEvent, PlayerDiedEvent, StructureDamagedEvent, StructureDestroyedEvent } from '@core/systems/CombatSystem';
 import { ResourceNode } from '@core/entities/ResourceNode';
 import { InventorySystem } from '@core/systems/InventorySystem';
 import { SpawnSystem } from '@core/systems/SpawnSystem';
@@ -19,7 +20,17 @@ import { NoiseSystem } from '@core/systems/NoiseSystem';
 import { ZombieSystem } from '@core/systems/ZombieSystem';
 import type { Zombie } from '@core/entities/enemies/Zombie';
 import { ZombieInfoPanel } from '@ui/ZombieInfoPanel';
+import { GameOverOverlay } from '@ui/GameOverOverlay';
 // Zombie system removed for refactor: all references stripped
+
+type DamageIndicator = {
+  id: number;
+  amount: number;
+  age: number;
+  lifetime: number;
+  risePx: number;
+  offsetXPx: number;
+};
 
 /**
  * Responsibility: Bootstrap engine, load config, and run fixed-step loop.
@@ -37,6 +48,7 @@ export class GameApp {
   private loop?: FixedStepLoop;
   private stepSec = 1 / 60;
   private input = new InputController();
+  private inputAttached = false;
   private player!: Player;
   private time!: TimeSystem;
   private hud!: HUD;
@@ -66,6 +78,8 @@ export class GameApp {
   private showHordeDebug = false;
   private disableZombieChase = false;
   private showSeparation = false;
+  private showZombieTargets = false;
+  private showZombieAggro = false;
   private debugMenu!: DebugMenu;
   private startX = 0;
   private startY = 0;
@@ -74,6 +88,11 @@ export class GameApp {
   private zombies!: ZombieSystem;
   private selectedZombieId: string | null = null;
   private zombieInfo!: ZombieInfoPanel;
+  private combat!: CombatSystem;
+  private gameOverOverlay!: GameOverOverlay;
+  private gameOver = false;
+  private damageIndicators: DamageIndicator[] = [];
+  private damageIdSeq = 0;
 
   constructor(engine: IEngineAdapter, bus: EventBus, cfg: ConfigService, container: HTMLElement) {
     this.engine = engine;
@@ -110,6 +129,7 @@ export class GameApp {
     this.currentZoom = Math.min(2.0, Math.max(1.0, isNaN(zoom) ? 1 : zoom));
     if ('setZoom' in this.engine) (this.engine as any).setZoom(this.currentZoom);
     this.input.attach(window);
+    this.inputAttached = true;
     window.addEventListener('keydown', this.onZoomKey);
     // Initialize NoiseSystem
     {
@@ -179,6 +199,7 @@ export class GameApp {
         const w = new Wall(`w-${tx}-${ty}`, isDoor ? 'Door' : 'Wall', tile, def.hp, def.cost);
         w.x = (tx + 0.5) * tile;
         w.y = (ty + 0.5) * tile;
+        w.playerBuilt = true;
         walls.push(w);
       }
     }
@@ -188,6 +209,11 @@ export class GameApp {
     const avoidStart = Number((this.cfg.getSpawn() as any).noSpawnRadiusTilesAroundStart ?? 0) * this.cfg.getGame().tileSize;
     const initialWalkers = Number(((this.cfg.getEnemies() as any).Walker?.initialCount ?? 8));
     this.zombies.spawnWalkers(initialWalkers, { x: this.player.x, y: this.player.y, rPx: avoidStart });
+    this.combat = new CombatSystem(this.bus, this.cfg.getGame().tileSize);
+    this.bus.on<PlayerDamagedEvent>('PlayerDamaged', this.onPlayerDamaged);
+    this.bus.on<PlayerDiedEvent>('PlayerDied', this.onPlayerDied);
+    this.bus.on<StructureDamagedEvent>('StructureDamaged', this.onStructureDamaged);
+    this.bus.on<StructureDestroyedEvent>('StructureDestroyed', this.onStructureDestroyed);
     // Initial spawn on Day 1 across full world (after structures exist), with constraints
     const initialPlanned = this.spawner.planCountsAll();
     const colls: Array<{ x: number; y: number; hw: number; hh: number }> = [];
@@ -282,6 +308,8 @@ export class GameApp {
       eclipseEvery: game.dayNight.eclipseEvery
     });
     this.hud = new HUD(this.container);
+    this.gameOverOverlay = new GameOverOverlay(this.container, this.resetRun);
+    this.hud.setPlayerHealth(this.player.getHp(), this.player.getMaxHp());
     this.debugMenu = new DebugMenu(this.container);
     this.debugMenu.setOnChange((opts) => {
       this.showColliders = opts.showColliders;
@@ -292,6 +320,8 @@ export class GameApp {
       this.showZombieStates = opts.showZombieStates;
       this.showHordeDebug = opts.showHordeDebug;
       this.disableZombieChase = opts.disableChase;
+      this.showZombieTargets = opts.showZombieTargets;
+      this.showZombieAggro = opts.showZombieAggro;
     });
     this.debugMenu.setShowColliders(this.showColliders);
     this.debugMenu.setShowNoSpawnRadius(this.showNoSpawnRadius);
@@ -299,6 +329,8 @@ export class GameApp {
     this.debugMenu.setShowNoise(this.showNoiseCircle);
     this.debugMenu.setShowZombieDetect(this.showZombieDetect);
     this.debugMenu.setShowZombieStates(this.showZombieStates);
+    this.debugMenu.setShowZombieTargets(this.showZombieTargets);
+    this.debugMenu.setShowZombieAggro(this.showZombieAggro);
     this.debugMenu.setShowHordeDebug(this.showHordeDebug);
     this.debugMenu.setDisableChase(this.disableZombieChase);
     this.debugMenu.setOnSpawnHorde(() => {
@@ -348,6 +380,7 @@ export class GameApp {
   }
 
   private update(): void {
+    if (this.gameOver) return;
     // Player movement & harvest handling
     const move = this.input.getMoveDir();
     const isMoving = move.x !== 0 || move.y !== 0;
@@ -592,12 +625,24 @@ export class GameApp {
     const phase = this.time.getPhase();
     const playerRadiusPx = this.cfg.getGame().tileSize * ((this.cfg.getGame() as any).render?.playerRadiusTiles ?? 0.35);
     const noiseRadiusPx = this.noise ? this.noise.getRadiusPx() : 0;
+    const zombieObstacles: Array<{ x: number; y: number; hw: number; hh: number; kind: 'wall' | 'node'; id?: string; type?: 'Wall' | 'Door'; playerBuilt?: boolean; structureKind?: 'door' | 'wall' | 'offense' }> = [];
+    for (const w of this.walls) {
+      if (w.type === 'Door' && w.isOpen) continue;
+      zombieObstacles.push({ x: w.x, y: w.y, hw: w.widthPx / 2, hh: w.heightPx / 2, kind: 'wall', id: w.id, type: w.type, playerBuilt: w.playerBuilt, structureKind: w.type === 'Door' ? 'door' : 'wall' });
+    }
+    for (const n of this.resources.getNodes()) {
+      zombieObstacles.push({ x: n.x, y: n.y, hw: n.radiusPx, hh: n.radiusPx, kind: 'node' });
+    }
     this.zombies.update(
       this.stepSec,
       { x: this.player.x, y: this.player.y },
       phase,
-      { noiseRadiusPx, playerRadiusPx, disableChase: this.disableZombieChase }
+      { noiseRadiusPx, playerRadiusPx, disableChase: this.disableZombieChase },
+      zombieObstacles
     );
+    this.combat.update(this.stepSec, this.zombies.getZombies(), this.player, this.walls);
+    this.updateDamageIndicators(this.stepSec);
+    this.hud.setPlayerHealth(this.player.getHp(), this.player.getMaxHp());
   }
 
   private render(): void {
@@ -607,6 +652,13 @@ export class GameApp {
     this.engine.setCameraCenter(this.player.x, this.player.y);
     this.engine.drawGrid(tileSize);
     this.engine.drawPlayer(this.player.x, this.player.y, tileSize * playerRadiusTiles);
+    const hpRatio = this.player.getMaxHp() > 0 ? Math.max(0, Math.min(1, this.player.getHp() / this.player.getMaxHp())) : 0;
+    const hpWidth = Math.max(36, tileSize * this.currentZoom * 1.3);
+    const hpHeight = Math.max(4, 6 * this.currentZoom);
+    const hpOffset = tileSize * this.currentZoom * 0.9;
+    const hpColor = hpRatio > 0.5 ? '#66bb6a' : hpRatio > 0.25 ? '#ffa726' : '#ef5350';
+    this.engine.drawHorizontalBar(this.player.x, this.player.y, hpWidth, hpHeight, hpRatio, hpOffset, { fill: hpColor });
+    this.renderDamageIndicators(tileSize);
     // Harvest progress (draw above the active node, above its capacity bar)
     if (this.harvest.active) {
       const progress01 = Math.max(
@@ -627,6 +679,14 @@ export class GameApp {
     for (const w of this.walls) {
       const selected = this.selectedWallId === w.id;
       this.engine.drawWall(w.x, w.y, w.widthPx, w.type, selected, w.isOpen);
+      if (w.maxHp > 0) {
+        const ratio = Math.max(0, Math.min(1, w.hp / w.maxHp));
+        const barWidth = Math.max(18, w.widthPx * this.currentZoom * 0.9);
+        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
+        const barOffset = (w.heightPx / 2) * this.currentZoom + 6;
+        const barColor = ratio > 0.66 ? '#81c784' : ratio > 0.33 ? '#ffb74d' : '#e57373';
+        this.engine.drawHorizontalBar(w.x, w.y, barWidth, barHeight, ratio, barOffset, { fill: barColor });
+      }
     }
     // Debug: colliders
     if (this.showColliders) {
@@ -635,6 +695,9 @@ export class GameApp {
       for (const w of this.walls) {
         if (w.type === 'Door' && w.isOpen) continue;
         this.engine.drawAABB(w.x, w.y, w.widthPx / 2, w.heightPx / 2, '#ff5252');
+        const debugLabel = w.playerBuilt ? 'PLAYER BUILT' : 'NOT PLAYER BUILT';
+        const labelOffset = (w.heightPx / 2) + 12;
+        this.engine.drawTextWorld(w.x, w.y - labelOffset, debugLabel, '#ffffff');
       }
       for (const n of this.resources.getNodes()) {
         const rcfg: any = (this.cfg.getResources().nodes as any)[n.archetype] ?? {};
@@ -693,27 +756,53 @@ export class GameApp {
         const r = (z as any).stats.detectRadiusTiles * this.cfg.getGame().tileSize * phaseScale;
         this.engine.drawCircleOutline(z.x, z.y, r, '#e57373');
       }
+      const labelOffset = this.cfg.getGame().tileSize * 0.35;
+      const lineStep = this.cfg.getGame().tileSize * 0.18;
+      let nextLine = 0;
       if (this.showZombieStates) {
-        const off = this.cfg.getGame().tileSize * 0.35;
         const txt = (z as any).state.toUpperCase();
-        this.engine.drawTextWorld(z.x + off, z.y - off, txt, '#ffffff');
-        // Horde status line below state text, only if in a horde
+        this.engine.drawTextWorld(z.x + labelOffset, z.y - labelOffset, txt, '#ffffff');
+        nextLine = 1;
         const hs = this.zombies.getHordeStatus((z as any).id);
         if (hs.inHorde) {
-          const lineOff = this.cfg.getGame().tileSize * 0.18; // a bit below state label
           const role = hs.isLeader ? 'LEADER' : 'FOLLOWER';
           const htxt = `IN HORDE - ${role}`;
-          this.engine.drawTextWorld(z.x + off, z.y - off + lineOff, htxt, '#ffffff');
+          this.engine.drawTextWorld(z.x + labelOffset, z.y - labelOffset + lineStep * nextLine, htxt, '#ffffff');
+          nextLine += 1;
         }
-        // Idle countdown below horde line, if applicable
         const idleLeft = (z as any).getIdleSecLeft ? (z as any).getIdleSecLeft() : 0;
         if ((z as any).state === 'idle' && idleLeft > 0) {
-          const lineOff2 = this.cfg.getGame().tileSize * 0.34;
           const itxt = `IDLE ${idleLeft.toFixed(1)}s`;
-          this.engine.drawTextWorld(z.x + off, z.y - off + lineOff2, itxt, '#ffd54f');
+          this.engine.drawTextWorld(z.x + labelOffset, z.y - labelOffset + lineStep * nextLine, itxt, '#ffd54f');
+          nextLine += 1;
         }
       }
-      // Horde debug visuals: leader outline and follower target spots
+      if (this.showZombieTargets || this.showZombieAggro) {
+        const dbg = (z as any).getDebugInfo ? (z as any).getDebugInfo() : null;
+        if (dbg) {
+          const baseY = z.y - labelOffset + lineStep * nextLine;
+          let extraLine = 0;
+          if (this.showZombieTargets) {
+            const targetLabel = dbg.targetKind === 'player' ? 'TARGET: PLAYER' : dbg.targetKind === 'none' ? 'TARGET: NONE' : `TARGET: ${dbg.targetKind.toUpperCase()} (${dbg.targetId ?? '?'})`;
+            const distTiles = (dbg.focusDistPx / this.cfg.getGame().tileSize).toFixed(2);
+            const targetText = `${targetLabel} @ ${distTiles}t`;
+            this.engine.drawTextWorld(z.x + labelOffset, baseY + lineStep * extraLine, targetText, '#ffd54f');
+            extraLine += 1;
+          }
+          if (this.showZombieAggro) {
+            const aggroText = `AGGRO: ${dbg.wantsAggro ? 'YES' : 'NO'} | LoS: ${dbg.hasLineOfSight ? 'CLR' : 'BLOCK'} | Det[P:${dbg.playerIntercepts ? 'Y' : 'N'} N:${dbg.noiseIntercepts ? 'Y' : 'N'}]`;
+            this.engine.drawTextWorld(z.x + labelOffset, baseY + lineStep * extraLine, aggroText, '#81d4fa');
+            extraLine += 1;
+          }
+          nextLine += extraLine;
+        }
+      }
+      if (this.showZombieTargets) {
+        const target = (z as any).getAttackStructure ? (z as any).getAttackStructure() : null;
+        if (target) {
+          this.engine.drawVector(z.x, z.y, target.x - z.x, target.y - z.y, '#ff9800');
+        }
+      }
       if (this.showHordeDebug) {
         const hs = this.zombies.getHordeStatus((z as any).id);
         if (hs.inHorde) {
@@ -760,6 +849,130 @@ export class GameApp {
     return true;
   }
 
+  private onStructureDamaged = ({ structureId, remainingHp }: StructureDamagedEvent): void => {
+
+    const wall = this.walls.find((w) => w.id === structureId);
+
+    if (!wall) return;
+
+    wall.hp = Math.max(0, remainingHp);
+
+    if (this.selectedWallId === structureId) {
+
+      const salvage = this.makeWallSalvage(wall);
+
+      this.nodePanel?.setWall(wall, salvage);
+
+    }
+
+  };
+
+
+
+  private onStructureDestroyed = ({ structureId, attackerId }: StructureDestroyedEvent): void => {
+
+    const idx = this.walls.findIndex((w) => w.id === structureId);
+
+    if (idx === -1) return;
+
+    this.walls.splice(idx, 1);
+
+    if (this.selectedWallId === structureId) {
+
+      this.selectedWallId = null;
+
+      this.nodePanel?.setWall(null, null);
+
+    }
+
+    for (const z of this.zombies.getZombies()) {
+
+      const target = z.getAttackStructure();
+
+      if (target && target.id === structureId) z.clearAttackStructure();
+
+    }
+
+    if (!this.gameOver && (this.cfg.getGame() as any).ui?.hintSec) {
+
+      this.hud.setHint(`Structure destroyed by ${attackerId}`);
+
+      this.hintTimer = Number((this.cfg.getGame() as any).ui?.hintSec ?? 2);
+
+    }
+
+  };
+
+
+
+  private onPlayerDamaged = ({ amount }: PlayerDamagedEvent): void => {
+    if (this.gameOver) return;
+    const dealt = Math.max(0, Math.floor(amount ?? 0));
+    if (dealt <= 0) return;
+    const tile = this.cfg.getGame().tileSize;
+    const lifetime = 2.0;
+    const risePx = tile * 1.2;
+    const spread = tile * 0.25;
+    const indicator: DamageIndicator = {
+      id: this.damageIdSeq += 1,
+      amount: dealt,
+      age: 0,
+      lifetime,
+      risePx,
+      offsetXPx: (Math.random() * 2 - 1) * spread
+    };
+    this.damageIndicators.push(indicator);
+  };
+
+  private updateDamageIndicators(dtSec: number): void {
+    if (!this.damageIndicators.length) return;
+    this.damageIndicators = this.damageIndicators.filter((d) => {
+      d.age += dtSec;
+      return d.age < d.lifetime;
+    });
+  }
+
+  private renderDamageIndicators(tileSize: number): void {
+    if (!this.damageIndicators.length) return;
+    const baseOffset = tileSize * 1.1;
+    for (const d of this.damageIndicators) {
+      const progress = Math.min(1, Math.max(0, d.age / d.lifetime));
+      const rise = d.risePx * progress;
+      const alpha = Math.max(0, 1 - progress);
+      const color = `rgba(255, 96, 96, ${alpha.toFixed(2)})`;
+      const x = this.player.x + d.offsetXPx;
+      const y = this.player.y - baseOffset - rise;
+      this.engine.drawTextWorld(x, y, `-${d.amount}`, color);
+    }
+  }
+
+  private onPlayerDied = ({ killerId }: PlayerDiedEvent): void => {
+    if (this.gameOver) return;
+    this.gameOver = true;
+    if (this.loop) this.loop.stop();
+    if (this.inputAttached) {
+      this.input.detach(window);
+      this.inputAttached = false;
+    }
+    window.removeEventListener('keydown', this.onZoomKey);
+    this.hintTimer = 0;
+    this.hud.setHint('');
+    this.damageIndicators.length = 0;
+    this.gameOverOverlay.show(killerId);
+  };
+
+  private resetRun = (): void => {
+    window.location.reload();
+  };
+
+  private makeWallSalvage(wall: Wall): Record<string, number> {
+    const buildables: any = this.cfg.getBuildables();
+    const salvagePct = Number((buildables?.globals?.salvageRefundPct ?? 50) / 100);
+    const out: Record<string, number> = {};
+    for (const [k, v] of Object.entries(wall.cost)) out[k] = Math.floor(v * salvagePct);
+    return out;
+  }
+
   private showPhaseHint(node: ResourceNode): void {
     const rcfg: any = (this.cfg.getResources().nodes as any)[node.archetype] ?? {};
     const rule: string = rcfg.phase ?? (rcfg.nightOnly ? 'night' : 'any');
@@ -783,3 +996,11 @@ export class GameApp {
 
   // Zombies removed: no spawning helpers
 }
+
+
+
+
+
+
+
+

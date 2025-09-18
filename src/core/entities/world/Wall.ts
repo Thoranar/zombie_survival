@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Responsibility: Simple wall/door structure with health and cost info.
  * Publishes: none
  * Subscribes: none
@@ -12,7 +12,9 @@ export class Wall {
   public readonly id: string;
   public readonly type: 'Wall' | 'Door';
   public hp: number;
-  public readonly cost: Record<string, number>;
+  public readonly maxHp: number;
+  public readonly cost: Record<string, number>
+  public playerBuilt = false;
   public isOpen = false;
 
   constructor(id: string, type: 'Wall' | 'Door', sizePx: number, hp: number, cost: Record<string, number>) {
@@ -21,7 +23,9 @@ export class Wall {
     this.widthPx = sizePx;
     this.heightPx = sizePx;
     this.hp = hp;
+    this.maxHp = hp;
     this.cost = cost;
+    this.playerBuilt = false;
   }
 
   public containsPoint(px: number, py: number): boolean {
