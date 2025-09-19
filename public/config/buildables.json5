@@ -1,7 +1,20 @@
-{
+﻿{
   "globals": { "salvageRefundPct": 50 },
   "fort": {
     "Wall": { "cost": { "Wood": 1 }, "hp": 200 },
     "Door": { "cost": { "Wood": 4 }, "hp": 180 }
+  },
+  "traps": {
+    "WoodenSpikeTrap": {
+      "label": "Wooden Spike Trap",
+      "cost": { "Wood": 3 },
+      "hp": 120,
+      "buildTimeSec": 1.8,
+      "noisePerSec": 0.1,
+      "damageOnTrigger": 35,
+      "selfDamageOnTrigger": 10,
+      "triggerIntervalSec": 1,
+      "icon": "spike"
+    }
   }
 }

@@ -27,6 +27,8 @@ import { ExperienceOverlay } from '@ui/ExperienceOverlay';
 import { LevelUpOverlay } from '@ui/LevelUpOverlay';
 import { BuildRadialMenu, BuildRadialOption } from '@ui/BuildRadialMenu';
 import { StructureBuilder, StructureBlueprint } from '@core/systems/StructureBuilder';
+import { Structure } from '@core/entities/world/Structure';
+import { Trap } from '@core/entities/world/Trap';
 
 // Zombie system removed for refactor: all references stripped
 
@@ -56,7 +58,7 @@ export class GameApp {
   private nodePanel?: NodePanel;
   private inventory!: InventorySystem;
   private harvest = { active: false, progressSec: 0, nodeId: null as string | null };
-  private deconstruct = { active: false, progressSec: 0, wallId: null as string | null };
+  private deconstruct = { active: false, progressSec: 0, structureId: null as string | null };
   private uiNoise = 0;
   private worldW = 0;
   private worldH = 0;
@@ -65,8 +67,9 @@ export class GameApp {
   private hintTimer = 0;
   private storageCrates: StorageCrate[] = [];
   private storedTotals: Record<string, number> = {};
-  private walls: import('@core/entities/world/Wall').Wall[] = [];
-  private selectedWallId: string | null = null;
+  private walls: Wall[] = [];
+  private traps: Trap[] = [];
+  private selectedStructureId: string | null = null;
   private showColliders = false;
   private showNoSpawnRadius = false;
   private showMinSeparation = false;
@@ -229,12 +232,12 @@ export class GameApp {
         if (!onEdge) continue;
         const isDoor = doorSide === 'east' && tx === centerX + half && ty === centerY;
         const structureId = `struct-initial-${this.nextStructureId++}`;
-        let wall: Wall | null = null;
+        let created: Structure | null = null;
         if (isDoor) {
           if (doorBlueprint) {
-            wall = this.structureBuilder.createStructureInstance(doorBlueprint.id, structureId) as Wall;
+            created = this.structureBuilder.createStructureInstance(doorBlueprint.id, structureId);
           } else if (wallBlueprint) {
-            wall = new Wall({
+            created = new Wall({
               id: structureId,
               tileSize: tile,
               hp: wallBlueprint.maxHp,
@@ -249,9 +252,10 @@ export class GameApp {
             });
           }
         } else if (wallBlueprint) {
-          wall = this.structureBuilder.createStructureInstance(wallBlueprint.id, structureId) as Wall;
+          created = this.structureBuilder.createStructureInstance(wallBlueprint.id, structureId);
         }
-        if (!wall) continue;
+        if (!(created instanceof Wall)) continue;
+        const wall = created;
         wall.setGridPosition(tx, ty);
         wall.playerBuilt = true;
         wall.state = 'completed';
@@ -262,6 +266,7 @@ export class GameApp {
       }
     }
     this.walls = walls;
+    this.traps = [];
     // Zombies: spawn initial walkers
     this.zombies = new ZombieSystem(this.bus, this.cfg, this.worldW, this.worldH);
     const avoidStart = Number((this.cfg.getSpawn() as any).noSpawnRadiusTilesAroundStart ?? 0) * this.cfg.getGame().tileSize;
@@ -282,6 +287,7 @@ export class GameApp {
     const initialPlanned = this.spawner.planCountsAll();
     const colls: Array<{ x: number; y: number; hw: number; hh: number }> = [];
     for (const w of this.walls) colls.push({ x: w.x, y: w.y, hw: w.widthPx / 2, hh: w.heightPx / 2 });
+    for (const t of this.traps) colls.push({ x: t.x, y: t.y, hw: t.widthPx / 2, hh: t.heightPx / 2 });
     for (const s of this.storageCrates) colls.push({ x: s.x, y: s.y, hw: s.sizePx / 2, hh: s.sizePx / 2 });
     const avoid = {
       x: this.player.x,
@@ -409,6 +415,10 @@ export class GameApp {
     this.updateBuildMenu();
     this.updateBuildPreview();
     if (this.input.consumeCancelBuild()) this.cancelBuildPlacementMode();
+    if (this.buildMenuVisible) {
+      return;
+    }
+
     // Player movement & harvest handling
     const move = this.input.getMoveDir();
     const isMoving = move.x !== 0 || move.y !== 0;
@@ -493,10 +503,10 @@ export class GameApp {
     const rangeTiles = (this.cfg.getGame() as any).player?.harvestRangeTiles ?? 1.75;
     const buildRange = rangeTiles * this.cfg.getGame().tileSize;
     const buildInteractHeld = interact && !isMoving;
-    const activeStructure = this.buildAction.structureId ? this.walls.find((w) => w.id === this.buildAction.structureId) ?? null : null;
-    let nearestStructure: Wall | null = null;
+    const activeStructure = this.findStructureById(this.buildAction.structureId);
+    let nearestStructure: Structure | null = null;
     let nearestStructureDistSq = Number.POSITIVE_INFINITY;
-    for (const structure of this.walls) {
+    for (const structure of this.getAllStructures()) {
       if (structure.isCompleted()) continue;
       const dxBuild = structure.x - this.player.x;
       const dyBuild = structure.y - this.player.y;
@@ -507,7 +517,7 @@ export class GameApp {
         nearestStructureDistSq = distSqBuild;
       }
     }
-    const updateBuildNoise = (structure: Wall | null, active: boolean): void => {
+    const updateBuildNoise = (structure: Structure | null, active: boolean): void => {
       if (!this.noise) return;
       if (active && structure && !this.instantBuild) {
         this.noise.setBuildActive(true);
@@ -517,7 +527,7 @@ export class GameApp {
         this.noise.setBuildNoisePerSec(0);
       }
     };
-    const updateDeconstructNoise = (structure: Wall | null, active: boolean): void => {
+    const updateDeconstructNoise = (structure: Structure | null, active: boolean): void => {
       if (!this.noise) return;
       if (active && structure) {
         this.noise.setDeconstructActive(true);
@@ -578,42 +588,42 @@ export class GameApp {
     } else if (!this.buildAction.active) {
       updateBuildNoise(null, false);
     }
-    const selectedWall = this.selectedWallId ? this.walls.find((w) => w.id === this.selectedWallId) ?? null : null;
+    const selectedStructure = this.findStructureById(this.selectedStructureId);
     const deconstructSec = Number((this.cfg.getGame() as any).player?.deconstructActionSec ?? 2.5);
-    const canReachWall = (wall: Wall | null): boolean => {
-      if (!wall) return false;
-      const dx = wall.x - this.player.x;
-      const dy = wall.y - this.player.y;
-      const reach = buildRange + Math.max(wall.getHalfWidth(), wall.getHalfHeight());
+    const canReachStructure = (structure: Structure | null): boolean => {
+      if (!structure) return false;
+      const dx = structure.x - this.player.x;
+      const dy = structure.y - this.player.y;
+      const reach = buildRange + Math.max(structure.getHalfWidth(), structure.getHalfHeight());
       return dx * dx + dy * dy <= reach * reach;
     };
 
     if (this.deconstruct.active) {
-      const wall = this.walls.find((w) => w.id === this.deconstruct.wallId) ?? null;
-      const withinRange = canReachWall(wall);
-      if (!deconstructHeld || isMoving || !wall || !withinRange) {
+      const targetStructure = this.findStructureById(this.deconstruct.structureId);
+      const withinRange = canReachStructure(targetStructure);
+      if (!deconstructHeld || isMoving || !targetStructure || !withinRange) {
         this.deconstruct.active = false;
         this.deconstruct.progressSec = 0;
-        this.deconstruct.wallId = null;
+        this.deconstruct.structureId = null;
         updateDeconstructNoise(null, false);
       } else {
         this.deconstruct.progressSec += this.stepSec;
-        updateDeconstructNoise(wall, true);
+        updateDeconstructNoise(targetStructure, true);
         const duration = Math.max(0, deconstructSec);
         if (duration === 0 || this.deconstruct.progressSec >= duration) {
-          this.completeDeconstruct(wall);
+          this.completeDeconstruct(targetStructure);
           this.deconstruct.active = false;
           this.deconstruct.progressSec = 0;
-          this.deconstruct.wallId = null;
+          this.deconstruct.structureId = null;
           updateDeconstructNoise(null, false);
         }
       }
-    } else if (deconstructHeld && !isMoving && selectedWall) {
-      const canStart = selectedWall.playerBuilt && selectedWall.isCompleted() && canReachWall(selectedWall);
+    } else if (deconstructHeld && !isMoving && selectedStructure) {
+      const canStart = selectedStructure.playerBuilt && selectedStructure.isCompleted() && canReachStructure(selectedStructure);
       if (canStart) {
         this.deconstruct.active = true;
         this.deconstruct.progressSec = 0;
-        this.deconstruct.wallId = selectedWall.id;
+        this.deconstruct.structureId = selectedStructure.id;
         if (this.buildAction.active) {
           this.buildAction.active = false;
           this.buildAction.structureId = null;
@@ -624,12 +634,12 @@ export class GameApp {
           this.harvest.progressSec = 0;
           this.harvest.nodeId = null;
         }
-        updateDeconstructNoise(selectedWall, true);
+        updateDeconstructNoise(selectedStructure, true);
       } else if (this.hintTimer <= 0) {
         let reason = '';
-        if (!selectedWall.playerBuilt) reason = 'Only player-built structures can be deconstructed';
-        else if (!selectedWall.isCompleted()) reason = 'Finish construction before deconstructing';
-        else if (!canReachWall(selectedWall)) reason = 'Move closer to deconstruct';
+        if (!selectedStructure.playerBuilt) reason = 'Only player-built structures can be deconstructed';
+        else if (!selectedStructure.isCompleted()) reason = 'Finish construction before deconstructing';
+        else if (!canReachStructure(selectedStructure)) reason = 'Move closer to deconstruct';
         else reason = 'Cannot deconstruct right now';
         this.hud.setHint(reason);
         this.hintTimer = Number(((this.cfg.getGame() as any).ui?.hintSec ?? 2));
@@ -639,7 +649,7 @@ export class GameApp {
         this.deconstruct.active = false;
       }
       this.deconstruct.progressSec = 0;
-      this.deconstruct.wallId = null;
+      this.deconstruct.structureId = null;
       updateDeconstructNoise(null, false);
     }
 
@@ -740,6 +750,7 @@ export class GameApp {
       for (const n of kept) this.resources.addNode(n);
       const colls2: Array<{ x: number; y: number; hw: number; hh: number }> = [];
       for (const w of this.walls) colls2.push({ x: w.x, y: w.y, hw: w.widthPx / 2, hh: w.heightPx / 2 });
+      for (const t of this.traps) colls2.push({ x: t.x, y: t.y, hw: t.widthPx / 2, hh: t.heightPx / 2 });
       for (const s of this.storageCrates) colls2.push({ x: s.x, y: s.y, hw: s.sizePx / 2, hh: s.sizePx / 2 });
       for (const n of kept) {
         const rcfg: any = (this.cfg.getResources().nodes as any)[n.archetype] ?? {};
@@ -825,7 +836,38 @@ export class GameApp {
       { noiseRadiusPx, playerRadiusPx, disableChase: this.disableZombieChase },
       zombieObstacles
     );
-    this.combat.update(this.stepSec, this.zombies.getZombies(), this.player, this.walls);
+    const zombiesList = this.zombies.getZombies();
+    for (const trap of this.traps) {
+      if (!trap.isCompleted() || trap.hp <= 0) {
+        trap.resetContacts();
+        continue;
+      }
+      const insideIds: string[] = [];
+      const halfW = trap.widthPx / 2;
+      const halfH = trap.heightPx / 2;
+      for (const zombie of zombiesList) {
+        const insideX = Math.abs(zombie.x - trap.x) <= halfW;
+        const insideY = Math.abs(zombie.y - trap.y) <= halfH;
+        if (insideX && insideY) insideIds.push(zombie.id);
+      }
+      trap.processContacts(insideIds, this.stepSec, (zombieId) => {
+        if (trap.damageOnTrigger > 0) {
+          this.zombies.damageZombie(zombieId, trap.damageOnTrigger);
+        }
+        if (trap.selfDamageOnTrigger > 0) {
+          const selfDamage = trap.applyDamage(trap.selfDamageOnTrigger);
+          if (selfDamage > 0) {
+            this.bus.emit<StructureDamagedEvent>('StructureDamaged', {
+              structureId: trap.id,
+              attackerId: zombieId,
+              amount: selfDamage,
+              remainingHp: trap.hp
+            });
+          }
+        }
+      });
+    }
+    this.combat.update(this.stepSec, zombiesList, this.player, this.walls);
     this.experience.update(this.stepSec, { x: this.player.x, y: this.player.y });
     this.combatText.update(this.stepSec);
     this.hud.setPlayerHealth(this.player.getHp(), this.player.getMaxHp());
@@ -837,6 +879,62 @@ export class GameApp {
     const playerRadiusTiles = (game as any).render?.playerRadiusTiles ?? 0.35;
     this.engine.setCameraCenter(this.player.x, this.player.y);
     this.engine.drawGrid(tileSize);
+    // Draw walls and door
+    for (const w of this.walls) {
+      const selected = this.selectedStructureId === w.id;
+      this.engine.drawWall(w.x, w.y, w.widthPx, w.type, selected, w.isOpen);
+      if (!w.isCompleted()) {
+        const ratio = w.getConstructionRatio();
+        const barWidth = Math.max(18, w.widthPx * this.currentZoom * 0.9);
+        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
+        const barOffset = (w.heightPx / 2) * this.currentZoom + 6;
+        this.engine.drawHorizontalBar(w.x, w.y, barWidth, barHeight, ratio, barOffset, { fill: '#ffd54f', background: 'rgba(0,0,0,0.65)' });
+      } else if (w.maxHp > 0 && w.hp < w.maxHp) {
+        const ratio = Math.max(0, Math.min(1, w.hp / w.maxHp));
+        const barWidth = Math.max(18, w.widthPx * this.currentZoom * 0.9);
+        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
+        const barOffset = (w.heightPx / 2) * this.currentZoom + 6;
+        const barColor = ratio > 0.66 ? '#81c784' : ratio > 0.33 ? '#ffb74d' : '#e57373';
+        this.engine.drawHorizontalBar(w.x, w.y, barWidth, barHeight, ratio, barOffset, { fill: barColor });
+      }
+      if (this.deconstruct.active && this.deconstruct.structureId === w.id) {
+        const duration = Math.max(0, Number((this.cfg.getGame() as any).player?.deconstructActionSec ?? 2.5));
+        const ratioDeconstruct = duration === 0 ? 1 : Math.max(0, Math.min(1, this.deconstruct.progressSec / duration));
+        const barWidth = Math.max(18, w.widthPx * this.currentZoom * 0.9);
+        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
+        const barOffset = (w.heightPx / 2) * this.currentZoom + 14;
+        this.engine.drawHorizontalBar(w.x, w.y, barWidth, barHeight, ratioDeconstruct, barOffset, { fill: '#ff7043', background: 'rgba(0,0,0,0.65)' });
+      }
+    }
+
+    // Draw traps
+    for (const trap of this.traps) {
+      const selected = this.selectedStructureId === trap.id;
+      const hpRatio = trap.maxHp > 0 ? Math.max(0, Math.min(1, trap.hp / trap.maxHp)) : 0;
+      this.engine.drawTrap(trap.x, trap.y, trap.widthPx, { icon: trap.icon, completed: trap.isCompleted(), hpRatio, selected });
+      if (!trap.isCompleted()) {
+        const ratio = trap.getConstructionRatio();
+        const barWidth = Math.max(18, trap.widthPx * this.currentZoom * 0.9);
+        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
+        const barOffset = (trap.heightPx / 2) * this.currentZoom + 6;
+        this.engine.drawHorizontalBar(trap.x, trap.y, barWidth, barHeight, ratio, barOffset, { fill: '#ffd54f', background: 'rgba(0,0,0,0.65)' });
+      } else if (trap.maxHp > 0 && trap.hp < trap.maxHp) {
+        const barWidth = Math.max(18, trap.widthPx * this.currentZoom * 0.9);
+        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
+        const barOffset = (trap.heightPx / 2) * this.currentZoom + 6;
+        const barColor = hpRatio > 0.66 ? '#4db6ac' : hpRatio > 0.33 ? '#ffb74d' : '#ef5350';
+        this.engine.drawHorizontalBar(trap.x, trap.y, barWidth, barHeight, hpRatio, barOffset, { fill: barColor });
+      }
+      if (this.deconstruct.active && this.deconstruct.structureId === trap.id) {
+        const duration = Math.max(0, Number((this.cfg.getGame() as any).player?.deconstructActionSec ?? 2.5));
+        const ratioDeconstruct = duration === 0 ? 1 : Math.max(0, Math.min(1, this.deconstruct.progressSec / duration));
+        const barWidth = Math.max(18, trap.widthPx * this.currentZoom * 0.9);
+        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
+        const barOffset = (trap.heightPx / 2) * this.currentZoom + 14;
+        this.engine.drawHorizontalBar(trap.x, trap.y, barWidth, barHeight, ratioDeconstruct, barOffset, { fill: '#ff7043', background: 'rgba(0,0,0,0.65)' });
+      }
+    }
+
     this.engine.drawPlayer(this.player.x, this.player.y, tileSize * playerRadiusTiles);
     const playerMaxHp = this.player.getMaxHp();
     const playerHp = this.player.getHp();
@@ -869,33 +967,6 @@ export class GameApp {
       this.engine.drawAABB(this.buildPreview.centerX, this.buildPreview.centerY, this.buildPreview.halfSize, this.buildPreview.halfSize, color);
     }
 
-    // Draw walls and door
-    for (const w of this.walls) {
-      const selected = this.selectedWallId === w.id;
-      this.engine.drawWall(w.x, w.y, w.widthPx, w.type, selected, w.isOpen);
-      if (!w.isCompleted()) {
-        const ratio = w.getConstructionRatio();
-        const barWidth = Math.max(18, w.widthPx * this.currentZoom * 0.9);
-        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
-        const barOffset = (w.heightPx / 2) * this.currentZoom + 6;
-        this.engine.drawHorizontalBar(w.x, w.y, barWidth, barHeight, ratio, barOffset, { fill: '#ffd54f', background: 'rgba(0,0,0,0.65)' });
-      } else if (w.maxHp > 0 && w.hp < w.maxHp) {
-        const ratio = Math.max(0, Math.min(1, w.hp / w.maxHp));
-        const barWidth = Math.max(18, w.widthPx * this.currentZoom * 0.9);
-        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
-        const barOffset = (w.heightPx / 2) * this.currentZoom + 6;
-        const barColor = ratio > 0.66 ? '#81c784' : ratio > 0.33 ? '#ffb74d' : '#e57373';
-        this.engine.drawHorizontalBar(w.x, w.y, barWidth, barHeight, ratio, barOffset, { fill: barColor });
-      }
-      if (this.deconstruct.active && this.deconstruct.wallId === w.id) {
-        const duration = Math.max(0, Number((this.cfg.getGame() as any).player?.deconstructActionSec ?? 2.5));
-        const ratioDeconstruct = duration === 0 ? 1 : Math.max(0, Math.min(1, this.deconstruct.progressSec / duration));
-        const barWidth = Math.max(18, w.widthPx * this.currentZoom * 0.9);
-        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
-        const barOffset = (w.heightPx / 2) * this.currentZoom + 14;
-        this.engine.drawHorizontalBar(w.x, w.y, barWidth, barHeight, ratioDeconstruct, barOffset, { fill: '#ff7043', background: 'rgba(0,0,0,0.65)' });
-      }
-    }
     // Debug: colliders
     if (this.showColliders) {
       const pr = this.cfg.getGame().tileSize * ((this.cfg.getGame() as any).render?.playerRadiusTiles ?? 0.35);
@@ -906,6 +977,12 @@ export class GameApp {
         const debugLabel = w.playerBuilt ? 'PLAYER BUILT' : 'NOT PLAYER BUILT';
         const labelOffset = (w.heightPx / 2) + 12;
         this.engine.drawTextWorld(w.x, w.y - labelOffset, debugLabel, '#ffffff');
+      }
+      for (const trap of this.traps) {
+        this.engine.drawAABB(trap.x, trap.y, trap.widthPx / 2, trap.heightPx / 2, '#ff5252');
+        const debugLabel = trap.playerBuilt ? 'PLAYER BUILT' : 'NOT PLAYER BUILT';
+        const labelOffset = (trap.heightPx / 2) + 12;
+        this.engine.drawTextWorld(trap.x, trap.y - labelOffset, `${trap.kind.toUpperCase()}: ${debugLabel}`, '#ffffff');
       }
       for (const n of this.resources.getNodes()) {
         const rcfg: any = (this.cfg.getResources().nodes as any)[n.archetype] ?? {};
@@ -1117,22 +1194,22 @@ export class GameApp {
   private damageStructuresDebug(amount: number): void {
     if (amount <= 0) return;
     const attackerId = 'debug-tools';
-    for (const wall of this.walls) {
-      if (!wall.playerBuilt) continue;
-      if (wall.hp <= 0) continue;
-      const originalHp = wall.hp;
+    for (const structure of this.getAllStructures()) {
+      if (!structure.playerBuilt) continue;
+      if (structure.hp <= 0) continue;
+      const originalHp = structure.hp;
       const newHp = Math.max(0, originalHp - amount);
       if (newHp === originalHp) continue;
-      wall.hp = newHp;
+      structure.hp = newHp;
       const dealt = originalHp - newHp;
       this.bus.emit<StructureDamagedEvent>('StructureDamaged', {
-        structureId: wall.id,
+        structureId: structure.id,
         attackerId,
         amount: dealt,
-        remainingHp: wall.hp
+        remainingHp: structure.hp
       });
-      if (wall.hp <= 0) {
-        this.bus.emit<StructureDestroyedEvent>('StructureDestroyed', { structureId: wall.id, attackerId });
+      if (structure.hp <= 0) {
+        this.bus.emit<StructureDestroyedEvent>('StructureDestroyed', { structureId: structure.id, attackerId });
       }
     }
   }
@@ -1140,19 +1217,19 @@ export class GameApp {
   private healStructuresDebug(amount: number): void {
     if (amount <= 0) return;
     const tile = this.cfg.getGame().tileSize;
-    for (const wall of this.walls) {
-      if (!wall.playerBuilt) continue;
-      if (wall.hp >= wall.maxHp) continue;
-      const originalHp = wall.hp;
-      wall.hp = Math.min(wall.maxHp, wall.hp + amount);
-      const restored = wall.hp - originalHp;
+    for (const structure of this.getAllStructures()) {
+      if (!structure.playerBuilt) continue;
+      if (structure.hp >= structure.maxHp) continue;
+      const originalHp = structure.hp;
+      structure.hp = Math.min(structure.maxHp, structure.hp + amount);
+      const restored = structure.hp - originalHp;
       if (restored <= 0) continue;
-      if (this.selectedWallId === wall.id) {
-        const salvage = this.makeWallSalvage(wall);
-        this.nodePanel?.setWall(wall, salvage);
+      if (this.selectedStructureId === structure.id) {
+        const salvage = this.makeStructureSalvage(structure);
+        this.nodePanel?.setStructure(structure, salvage);
       }
-      const baseOffset = (wall.heightPx / 2) + Math.max(12, tile * 0.3);
-      const spread = Math.max(tile * 0.2, wall.widthPx * 0.25);
+      const baseOffset = (structure.heightPx / 2) + Math.max(12, tile * 0.3);
+      const spread = Math.max(tile * 0.2, structure.widthPx * 0.25);
       this.combatText.spawn({
         text: `+${Math.max(1, Math.round(restored))}`,
         color: '#81c784',
@@ -1160,7 +1237,7 @@ export class GameApp {
         risePx: tile,
         spreadXPx: spread,
         baseYOffsetPx: baseOffset,
-        getPosition: () => ({ x: wall.x, y: wall.y })
+        getPosition: () => ({ x: structure.x, y: structure.y })
       });
     }
   }
@@ -1194,21 +1271,24 @@ export class GameApp {
     this.updateZombieInfoPanel();
   }
   private onStructureDamaged = ({ structureId, amount, remainingHp }: StructureDamagedEvent): void => {
-    const wall = this.walls.find((w) => w.id === structureId);
-    if (!wall) return;
+    const structure = this.findStructureById(structureId);
+    if (!structure) return;
 
-    wall.hp = Math.max(0, remainingHp);
+    structure.hp = Math.max(0, remainingHp);
+    if (structure.hp <= 0) {
+      structure.state = 'underConstruction';
+    }
 
-    if (this.selectedWallId === structureId) {
-      const salvage = this.makeWallSalvage(wall);
-      this.nodePanel?.setWall(wall, salvage);
+    if (this.selectedStructureId === structureId) {
+      const salvage = this.makeStructureSalvage(structure);
+      this.nodePanel?.setStructure(structure, salvage);
     }
 
     const dealt = Math.max(0, Math.floor(amount ?? 0));
     if (dealt > 0) {
       const tile = this.cfg.getGame().tileSize;
-      const baseOffset = (wall.heightPx / 2) + Math.max(12, tile * 0.3);
-      const spread = Math.max(tile * 0.2, wall.widthPx * 0.25);
+      const baseOffset = (structure.heightPx / 2) + Math.max(12, tile * 0.3);
+      const spread = Math.max(tile * 0.2, structure.widthPx * 0.25);
       this.combatText.spawn({
         text: `-${dealt}`,
         color: '#ff8a65',
@@ -1216,7 +1296,7 @@ export class GameApp {
         risePx: tile,
         spreadXPx: spread,
         baseYOffsetPx: baseOffset,
-        getPosition: () => ({ x: wall.x, y: wall.y })
+        getPosition: () => ({ x: structure.x, y: structure.y })
       });
     }
   };
@@ -1226,37 +1306,31 @@ export class GameApp {
 
 
   private onStructureDestroyed = ({ structureId, attackerId }: StructureDestroyedEvent): void => {
+    const structure = this.findStructureById(structureId);
+    if (!structure) return;
 
-    const idx = this.walls.findIndex((w) => w.id === structureId);
+    if (structure instanceof Wall) {
+      const idx = this.walls.findIndex((w) => w.id === structureId);
+      if (idx !== -1) this.walls.splice(idx, 1);
+    } else if (structure instanceof Trap) {
+      const idx = this.traps.findIndex((t) => t.id === structureId);
+      if (idx !== -1) this.traps.splice(idx, 1);
+    }
 
-    if (idx === -1) return;
-
-    this.walls.splice(idx, 1);
-
-    if (this.selectedWallId === structureId) {
-
-      this.selectedWallId = null;
-
-      this.nodePanel?.setWall(null, null);
-
+    if (this.selectedStructureId === structureId) {
+      this.selectedStructureId = null;
+      this.nodePanel?.setStructure(null, null);
     }
 
     for (const z of this.zombies.getZombies()) {
-
       const target = z.getAttackStructure();
-
       if (target && target.id === structureId) z.clearAttackStructure();
-
     }
 
     if (!this.gameOver && (this.cfg.getGame() as any).ui?.hintSec) {
-
       this.hud.setHint(`Structure destroyed by ${attackerId}`);
-
       this.hintTimer = Number((this.cfg.getGame() as any).ui?.hintSec ?? 2);
-
     }
-
   };
 
 
@@ -1347,8 +1421,8 @@ export class GameApp {
     window.location.reload();
   };
 
-  private completeDeconstruct(wall: Wall): void {
-    const salvage = this.makeWallSalvage(wall);
+  private completeDeconstruct(structure: Structure): void {
+    const salvage = this.makeStructureSalvage(structure);
     const tile = this.cfg.getGame().tileSize;
     const summaryParts: string[] = [];
     for (const [resource, amount] of Object.entries(salvage)) {
@@ -1366,23 +1440,32 @@ export class GameApp {
         getPosition: () => ({ x: this.player.x, y: this.player.y })
       });
     }
-    this.bus.emit<StructureDestroyedEvent>('StructureDestroyed', { structureId: wall.id, attackerId: this.player.id });
+    this.bus.emit<StructureDestroyedEvent>('StructureDestroyed', { structureId: structure.id, attackerId: this.player.id });
     const hintSec = Number(((this.cfg.getGame() as any).ui?.hintSec ?? 2));
     if (summaryParts.length > 0) {
       this.hud.setHint(`Recovered ${summaryParts.join(', ')}`);
       this.hintTimer = hintSec;
     } else if (hintSec > 0) {
-      this.hud.setHint(`${wall.kind} dismantled`);
+      this.hud.setHint(`${structure.kind} dismantled`);
       this.hintTimer = hintSec;
     }
   }
 
-  private makeWallSalvage(wall: Wall): Record<string, number> {
+  private makeStructureSalvage(structure: Structure): Record<string, number> {
     const buildables: any = this.cfg.getBuildables();
     const salvagePct = Number((buildables?.globals?.salvageRefundPct ?? 50) / 100);
     const out: Record<string, number> = {};
-    for (const [k, v] of Object.entries(wall.cost)) out[k] = Math.floor(v * salvagePct);
+    for (const [k, v] of Object.entries(structure.cost)) out[k] = Math.floor(v * salvagePct);
     return out;
+  }
+
+  private getAllStructures(): Structure[] {
+    return [...this.walls, ...this.traps];
+  }
+
+  private findStructureById(id: string | null): Structure | null {
+    if (!id) return null;
+    return this.getAllStructures().find((s) => s.id === id) ?? null;
   }
 
   private showPhaseHint(node: ResourceNode): void {
@@ -1454,17 +1537,25 @@ export class GameApp {
       return;
     }
 
+    const held = this.input.isBuildMenuHeld();
+    const menuActive = held || this.buildMenuVisible;
+
     let selectionChanged = false;
-    if (this.input.consumeBuildCycleNext()) {
-      this.cycleBlueprint(1);
-      selectionChanged = true;
-    }
-    if (this.input.consumeBuildCyclePrev()) {
-      this.cycleBlueprint(-1);
-      selectionChanged = true;
+    if (menuActive) {
+      if (this.input.consumeBuildCycleNext()) {
+        this.cycleBlueprint(1);
+        selectionChanged = true;
+      }
+      if (this.input.consumeBuildCyclePrev()) {
+        this.cycleBlueprint(-1);
+        selectionChanged = true;
+      }
+    } else {
+      this.input.consumeBuildCycleNext();
+      this.input.consumeBuildCyclePrev();
     }
 
-    const held = this.input.isBuildMenuHeld();
+
     const selected = this.getSelectedBlueprint();
     const options = this.getBuildMenuOptions();
 
@@ -1534,6 +1625,13 @@ export class GameApp {
       const overlapY = Math.abs(centerY - wall.y) < halfSize + hh;
       if (overlapX && overlapY) return false;
     }
+    for (const trap of this.traps) {
+      const hw = trap.widthPx / 2;
+      const hh = trap.heightPx / 2;
+      const overlapX = Math.abs(centerX - trap.x) < halfSize + hw;
+      const overlapY = Math.abs(centerY - trap.y) < halfSize + hh;
+      if (overlapX && overlapY) return false;
+    }
     for (const crate of this.storageCrates) {
       const half = crate.sizePx / 2;
       const overlapX = Math.abs(centerX - crate.x) < halfSize + half;
@@ -1568,10 +1666,10 @@ export class GameApp {
   private queueBuildPlacement(blueprint: StructureBlueprint, tileX: number, tileY: number): void {
     if (!this.structureBuilder) return;
     const structureId = `struct-${this.nextStructureId++}`;
-    const structure = this.structureBuilder.createStructureInstance(blueprint.id, structureId) as Wall;
+    const structure = this.structureBuilder.createStructureInstance(blueprint.id, structureId);
     structure.setGridPosition(tileX, tileY);
     structure.playerBuilt = true;
-    structure.isOpen = false;
+    if (structure instanceof Wall) structure.isOpen = false;
     if (this.instantBuild) {
       structure.state = 'completed';
       structure.buildProgressSec = structure.buildTimeSec;
@@ -1579,7 +1677,13 @@ export class GameApp {
     } else {
       structure.beginConstruction();
     }
-    this.walls.push(structure);
+    if (structure instanceof Wall) {
+      this.walls.push(structure);
+    } else if (structure instanceof Trap) {
+      this.traps.push(structure);
+    } else {
+      throw new Error(`Unsupported structure instance: ${structure.constructor.name}`);
+    }
     this.buildPreviewSuppressed = true;
     this.buildPreview.active = false;
     const hintSec = Number(((this.cfg.getGame() as any).ui?.hintSec ?? 2));
@@ -1682,28 +1786,29 @@ export class GameApp {
     if (pickedZombie) {
       this.selectedZombieId = pickedZombie.id;
       this.selectedNodeId = null;
-      this.selectedWallId = null;
+      this.selectedStructureId = null;
       this.nodePanel?.setNode(null);
       this.updateZombieInfoPanel();
       return;
     }
 
-    let wallPicked: Wall | null = null;
-    for (const w of this.walls) {
-      if (w.containsPoint(world.x, world.y)) {
-        wallPicked = w;
-        break;
+    let pickedStructure: Structure | null = null;
+    let bestStructureDist = Number.POSITIVE_INFINITY;
+    for (const structure of this.getAllStructures()) {
+      if (!structure.containsPoint(world.x, world.y)) continue;
+      const dxStruct = structure.x - world.x;
+      const dyStruct = structure.y - world.y;
+      const d2Struct = dxStruct * dxStruct + dyStruct * dyStruct;
+      if (d2Struct < bestStructureDist) {
+        bestStructureDist = d2Struct;
+        pickedStructure = structure;
       }
     }
-    if (wallPicked) {
-      this.selectedWallId = wallPicked.id;
+    if (pickedStructure) {
+      this.selectedStructureId = pickedStructure.id;
       this.selectedNodeId = null;
-      const buildables = this.cfg.getBuildables() as any;
-      const salvagePct = Number((buildables?.globals?.salvageRefundPct ?? 50) / 100);
-      const cost = wallPicked.cost ?? {};
-      const salv: Record<string, number> = {};
-      for (const [k, v] of Object.entries(cost)) salv[k] = Math.floor((v ?? 0) * salvagePct);
-      this.nodePanel?.setWall(wallPicked, salv);
+      const salvage = this.makeStructureSalvage(pickedStructure);
+      this.nodePanel?.setStructure(pickedStructure, salvage);
       return;
     }
 
@@ -1721,7 +1826,7 @@ export class GameApp {
     }
     if (picked && bestD2 <= picked.radiusPx * picked.radiusPx) {
       this.selectedNodeId = picked.id;
-      this.selectedWallId = null;
+      this.selectedStructureId = null;
       this.nodePanel?.setNode(picked);
     }
   };
