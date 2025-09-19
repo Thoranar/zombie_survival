@@ -47,6 +47,8 @@
     "harvestRangeTiles": 1.75,
     // seconds per single harvest action
     "harvestActionSec": 2,
+    // seconds to dismantle a structure for salvage
+    "deconstructActionSec": 2.5,
     // factor applied to all movement speeds when above carryCap (e.g., 0.5)
     "overCapacitySpeedFactor": 0.5
   },

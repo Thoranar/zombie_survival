@@ -1,38 +1,47 @@
-﻿/**
- * Responsibility: Simple wall/door structure with health and cost info.
- * Publishes: none
- * Subscribes: none
- * Config: buildables.fort.Wall / Door
+import { Structure, StructureInitParams, StructureState } from './Structure';
+
+export interface WallInitParams {
+  id: string;
+  tileSize: number;
+  hp: number;
+  cost: Record<string, number>;
+  buildTimeSec: number;
+  noisePerSec: number;
+  footprintTiles?: number;
+  type?: 'Wall' | 'Door';
+  initialHp?: number;
+  state?: StructureState;
+  playerBuilt?: boolean;
+}
+
+/**
+ * Responsibility: Fortification structure (wall/door) with health, cost, and construction state.
  */
-export class Wall {
-  public x = 0;
-  public y = 0;
-  public widthPx: number;
-  public heightPx: number;
-  public readonly id: string;
+export class Wall extends Structure {
   public readonly type: 'Wall' | 'Door';
-  public hp: number;
-  public readonly maxHp: number;
-  public readonly cost: Record<string, number>
-  public playerBuilt = false;
   public isOpen = false;
 
-  constructor(id: string, type: 'Wall' | 'Door', sizePx: number, hp: number, cost: Record<string, number>) {
-    this.id = id;
-    this.type = type;
-    this.widthPx = sizePx;
-    this.heightPx = sizePx;
-    this.hp = hp;
-    this.maxHp = hp;
-    this.cost = cost;
-    this.playerBuilt = false;
-  }
-
-  public containsPoint(px: number, py: number): boolean {
-    return px >= this.x - this.widthPx / 2 && px <= this.x + this.widthPx / 2 && py >= this.y - this.heightPx / 2 && py <= this.y + this.heightPx / 2;
+  constructor(params: WallInitParams) {
+    const init: StructureInitParams = {
+      id: params.id,
+      kind: (params.type ?? 'Wall'),
+      tileSize: params.tileSize,
+      footprintTiles: params.footprintTiles ?? 1,
+      maxHp: params.hp,
+      cost: params.cost,
+      buildTimeSec: params.buildTimeSec,
+      noisePerSec: params.noisePerSec,
+      initialHp: params.initialHp,
+      state: params.state,
+      playerBuilt: params.playerBuilt
+    };
+    super(init);
+    this.type = params.type ?? 'Wall';
   }
 
   public toggleOpen(): void {
-    if (this.type === 'Door') this.isOpen = !this.isOpen;
+    if (this.type !== 'Door') return;
+    if (!this.isCompleted()) return;
+    this.isOpen = !this.isOpen;
   }
 }

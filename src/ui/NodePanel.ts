@@ -59,6 +59,10 @@ export class NodePanel {
       const salvTxt = salvage ? Object.entries(salvage).map(([k, v]) => `${k}:${Math.floor(v)}`).join(' ') : 'N/A';
       stats.textContent = `HP: ${Math.floor(this.wall.hp)}  |  Salvage: ${salvTxt}  |  PlayerBuilt: ${this.wall.playerBuilt ? 'Yes' : 'No'}`;
       this.root.appendChild(stats);
+      const hint = document.createElement('div');
+      hint.style.marginTop = '4px';
+      hint.textContent = 'Hold X to deconstruct and recover salvage.';
+      this.root.appendChild(hint);
       return;
     }
     if (n) {

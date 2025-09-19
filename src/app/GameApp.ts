@@ -1,4 +1,4 @@
-﻿import { IEngineAdapter } from './EngineAdapter';
+import { IEngineAdapter } from './EngineAdapter';
 import { EventBus } from './EventBus';
 import { FixedStepLoop } from './FixedStepLoop';
 import { ConfigService } from '@core/data/ConfigService';
@@ -25,6 +25,8 @@ import { CombatTextManager } from '@ui/CombatTextManager';
 import { ExperienceSystem, PlayerExperienceChangedEvent, PlayerLevelUpEvent } from '@core/systems/ExperienceSystem';
 import { ExperienceOverlay } from '@ui/ExperienceOverlay';
 import { LevelUpOverlay } from '@ui/LevelUpOverlay';
+import { BuildRadialMenu, BuildRadialOption } from '@ui/BuildRadialMenu';
+import { StructureBuilder, StructureBlueprint } from '@core/systems/StructureBuilder';
 
 // Zombie system removed for refactor: all references stripped
 
@@ -54,6 +56,7 @@ export class GameApp {
   private nodePanel?: NodePanel;
   private inventory!: InventorySystem;
   private harvest = { active: false, progressSec: 0, nodeId: null as string | null };
+  private deconstruct = { active: false, progressSec: 0, wallId: null as string | null };
   private uiNoise = 0;
   private worldW = 0;
   private worldH = 0;
@@ -95,6 +98,21 @@ export class GameApp {
   private gameOver = false;
   private combatText: CombatTextManager;
 
+  private structureBuilder!: StructureBuilder;
+  private buildMenu!: BuildRadialMenu;
+  private buildBlueprints: StructureBlueprint[] = [];
+  private buildSelectedBlueprintId: string | null = null;
+  private buildSelectedIndex = 0;
+  private buildMenuVisible = false;
+  private buildPreviewSuppressed = false;
+  private buildPreview = { active: false, blueprintId: null as string | null, centerX: 0, centerY: 0, halfSize: 0, tileX: 0, tileY: 0, valid: false };
+  private buildAction = { active: false, structureId: null as string | null };
+  private mouseWorld = { x: 0, y: 0 };
+  private canvasEl: HTMLCanvasElement | null = null;
+  private nextStructureId = 0;
+  private freeBuild = false;
+  private instantBuild = false;
+
 
   constructor(engine: IEngineAdapter, bus: EventBus, cfg: ConfigService, container: HTMLElement) {
     this.engine = engine;
@@ -129,6 +147,8 @@ export class GameApp {
     this.player.y = worldH / 2;
     this.startX = this.player.x;
     this.startY = this.player.y;
+    this.mouseWorld.x = this.player.x;
+    this.mouseWorld.y = this.player.y;
     this.engine.setWorldSize(worldW, worldH);
     // Set camera zoom from config
     const zoom = Number(((this.cfg.getGame() as any).render?.zoom ?? 1));
@@ -184,32 +204,61 @@ export class GameApp {
 
     // Load buildables and spawn a 9x9 perimeter of walls with one door
     await this.cfg.loadBuildablesConfigBrowser(`${base}config/buildables.json5`);
-    const fort = (this.cfg.getBuildables() as any).fort;
+    this.structureBuilder = new StructureBuilder(this.cfg.getBuildables(), this.cfg.getGame().tileSize);
+    this.loadBuildBlueprints();
+    this.buildMenu = new BuildRadialMenu(this.container);
+    const buildablesCfg = this.cfg.getBuildables() as any;
     const tile = this.cfg.getGame().tileSize;
     const sizeTiles = 9;
     const half = Math.floor(sizeTiles / 2);
     const centerX = Math.round(this.player.x / tile);
     const centerY = Math.round(this.player.y / tile);
     const doorSide: 'north' | 'south' | 'east' | 'west' = 'east';
-    const salvagePct = Number(((this.cfg.getBuildables() as any).globals?.salvageRefundPct ?? 50) / 100);
+    const salvagePct = Number((buildablesCfg?.globals?.salvageRefundPct ?? 50) / 100);
     const mkSalv = (cost: Record<string, number>) => {
       const o: Record<string, number> = {};
       for (const [k, v] of Object.entries(cost)) o[k] = Math.floor(v * salvagePct);
       return o;
     };
     const walls: Wall[] = [];
+    const wallBlueprint = this.structureBuilder.getBlueprint('fort:Wall');
+    const doorBlueprint = this.structureBuilder.getBlueprint('fort:Door');
     for (let tx = centerX - half; tx <= centerX + half; tx += 1) {
       for (let ty = centerY - half; ty <= centerY + half; ty += 1) {
         const onEdge = tx === centerX - half || tx === centerX + half || ty === centerY - half || ty === centerY + half;
         if (!onEdge) continue;
-        // Door placement on east edge middle
         const isDoor = doorSide === 'east' && tx === centerX + half && ty === centerY;
-        const def = isDoor ? fort.Door : fort.Wall;
-        const w = new Wall(`w-${tx}-${ty}`, isDoor ? 'Door' : 'Wall', tile, def.hp, def.cost);
-        w.x = (tx + 0.5) * tile;
-        w.y = (ty + 0.5) * tile;
-        w.playerBuilt = true;
-        walls.push(w);
+        const structureId = `struct-initial-${this.nextStructureId++}`;
+        let wall: Wall | null = null;
+        if (isDoor) {
+          if (doorBlueprint) {
+            wall = this.structureBuilder.createStructureInstance(doorBlueprint.id, structureId) as Wall;
+          } else if (wallBlueprint) {
+            wall = new Wall({
+              id: structureId,
+              tileSize: tile,
+              hp: wallBlueprint.maxHp,
+              cost: wallBlueprint.cost,
+              buildTimeSec: wallBlueprint.buildTimeSec,
+              noisePerSec: wallBlueprint.noisePerSec,
+              footprintTiles: wallBlueprint.footprintTiles,
+              type: 'Door',
+              state: 'completed',
+              playerBuilt: true,
+              initialHp: wallBlueprint.maxHp
+            });
+          }
+        } else if (wallBlueprint) {
+          wall = this.structureBuilder.createStructureInstance(wallBlueprint.id, structureId) as Wall;
+        }
+        if (!wall) continue;
+        wall.setGridPosition(tx, ty);
+        wall.playerBuilt = true;
+        wall.state = 'completed';
+        wall.buildProgressSec = wall.buildTimeSec;
+        wall.hp = wall.maxHp;
+        wall.isOpen = false;
+        walls.push(wall);
       }
     }
     this.walls = walls;
@@ -248,66 +297,14 @@ export class GameApp {
     for (const n of initialNodes) this.resources.addNode(n);
     this.lastSpawnDay = 1;
     // mouse selection
-    const canvasEl = this.container.querySelector('canvas') as HTMLCanvasElement | null;
-    canvasEl?.addEventListener('click', (e) => {
-      const rect2 = (e.target as HTMLCanvasElement).getBoundingClientRect();
-      const sx = e.clientX - rect2.left;
-      const sy = e.clientY - rect2.top;
-      const world = this.engine.screenToWorld(sx, sy);
-      // Check zombies first
-      const zs = this.zombies?.getZombies?.() ?? [];
-      let pickedZ: Zombie | null = null;
-      let bestZd2 = Number.POSITIVE_INFINITY;
-      for (const z of zs as any) {
-        const dx = z.x - world.x;
-        const dy = z.y - world.y;
-        const d2 = dx * dx + dy * dy;
-        const r = this.cfg.getGame().tileSize * 0.3; // selection radius ~ 0.3 tiles
-        if (d2 <= r * r && d2 < bestZd2) { bestZd2 = d2; pickedZ = z as Zombie; }
-      }
-      if (pickedZ) {
-        this.selectedZombieId = (pickedZ as any).id;
-        this.selectedNodeId = null;
-        this.selectedWallId = null;
-        this.nodePanel?.setNode(null);
-        this.updateZombieInfoPanel();
-        return;
-      }
-      // Check walls first
-      let wallPicked: import('@core/entities/world/Wall').Wall | null = null;
-      for (const w of this.walls) {
-        if (w.containsPoint(world.x, world.y)) { wallPicked = w; break; }
-      }
-      if (wallPicked) {
-        this.selectedWallId = wallPicked.id;
-        this.selectedNodeId = null;
-        const b = this.cfg.getBuildables() as any;
-        const salvagePct = Number((b.globals?.salvageRefundPct ?? 50) / 100);
-        const cost = wallPicked.cost;
-        const salv: Record<string, number> = {};
-        for (const [k, v] of Object.entries(cost)) salv[k] = Math.floor(v * salvagePct);
-        this.nodePanel?.setWall(wallPicked, salv);
-        return;
-      }
-      // then nodes
-      const nodes = this.resources.getNodes();
-      let picked: ResourceNode | null = null;
-      let bestD2 = Number.POSITIVE_INFINITY;
-      for (const n of nodes) {
-        const dx = n.x - world.x;
-        const dy = n.y - world.y;
-        const d2 = dx * dx + dy * dy;
-        if (d2 < bestD2) {
-          bestD2 = d2;
-          picked = n;
-        }
-      }
-      if (picked && bestD2 <= picked.radiusPx * picked.radiusPx) {
-        this.selectedNodeId = picked.id;
-        this.selectedWallId = null;
-        this.nodePanel?.setNode(picked);
-      }
-    });
+    this.canvasEl = this.container.querySelector('canvas') as HTMLCanvasElement | null;
+    if (this.canvasEl) {
+      this.canvasEl.addEventListener('click', this.onCanvasClick);
+      this.canvasEl.addEventListener('mousemove', this.onCanvasMouseMove);
+      this.canvasEl.addEventListener('mousedown', this.onCanvasMouseDown);
+      this.canvasEl.addEventListener('contextmenu', this.onCanvasContextMenu);
+    }
+
     // Clear selection when node is depleted and removed
     this.bus.on<{ id: string }>('NodeDepleted', ({ id }) => {
       if (this.selectedNodeId === id) {
@@ -338,6 +335,8 @@ export class GameApp {
       this.showZombieTargets = opts.showZombieTargets;
       this.showZombieAggro = opts.showZombieAggro;
       this.showExperienceNumbers = opts.showExperienceNumbers;
+      this.freeBuild = opts.freeBuild;
+      this.instantBuild = opts.instantBuild;
       this.refreshExperienceOverlay();
     });
     this.debugMenu.setShowColliders(this.showColliders);
@@ -349,6 +348,8 @@ export class GameApp {
     this.debugMenu.setShowZombieTargets(this.showZombieTargets);
     this.debugMenu.setShowZombieAggro(this.showZombieAggro);
     this.debugMenu.setShowExperienceNumbers(this.showExperienceNumbers);
+    this.debugMenu.setFreeBuild(this.freeBuild);
+    this.debugMenu.setInstantBuild(this.instantBuild);
     this.debugMenu.setShowHordeDebug(this.showHordeDebug);
     this.debugMenu.setDisableChase(this.disableZombieChase);
     this.debugMenu.setOnDamagePlayer(() => this.damagePlayerDebug(10));
@@ -405,10 +406,14 @@ export class GameApp {
 
   private update(): void {
     if (this.gameOver || this.levelUpPaused) return;
+    this.updateBuildMenu();
+    this.updateBuildPreview();
+    if (this.input.consumeCancelBuild()) this.cancelBuildPlacementMode();
     // Player movement & harvest handling
     const move = this.input.getMoveDir();
     const isMoving = move.x !== 0 || move.y !== 0;
     const interact = this.input.isInteractHeld();
+    const deconstructHeld = this.input.isDeconstructHeld();
     // apply movement with potential speed penalty
     const oc = this.inventory.isOverCapacity();
     const speedFactor = oc ? (this.cfg.getGame() as any).player?.overCapacitySpeedFactor ?? 1 : 1;
@@ -485,23 +490,162 @@ export class GameApp {
       }
     }
 
-    // Harvest action
     const rangeTiles = (this.cfg.getGame() as any).player?.harvestRangeTiles ?? 1.75;
-    const actionSec = (this.cfg.getGame() as any).player?.harvestActionSec ?? 2;
-    // Find nearest node within range (harvest target does not require selection)
-    const nodes = this.resources.getNodes();
-    const maxDist = rangeTiles * this.cfg.getGame().tileSize;
-    let nearest: ResourceNode | null = null;
-    let bestD2 = Number.POSITIVE_INFINITY;
-    for (const n of nodes) {
-      const dx = n.x - this.player.x;
-      const dy = n.y - this.player.y;
-      const d2 = dx * dx + dy * dy;
-      if (d2 <= maxDist * maxDist && d2 < bestD2) {
-        bestD2 = d2;
-        nearest = n;
+    const buildRange = rangeTiles * this.cfg.getGame().tileSize;
+    const buildInteractHeld = interact && !isMoving;
+    const activeStructure = this.buildAction.structureId ? this.walls.find((w) => w.id === this.buildAction.structureId) ?? null : null;
+    let nearestStructure: Wall | null = null;
+    let nearestStructureDistSq = Number.POSITIVE_INFINITY;
+    for (const structure of this.walls) {
+      if (structure.isCompleted()) continue;
+      const dxBuild = structure.x - this.player.x;
+      const dyBuild = structure.y - this.player.y;
+      const reach = buildRange + Math.max(structure.getHalfWidth(), structure.getHalfHeight());
+      const distSqBuild = dxBuild * dxBuild + dyBuild * dyBuild;
+      if (distSqBuild <= reach * reach && distSqBuild < nearestStructureDistSq) {
+        nearestStructure = structure;
+        nearestStructureDistSq = distSqBuild;
       }
     }
+    const updateBuildNoise = (structure: Wall | null, active: boolean): void => {
+      if (!this.noise) return;
+      if (active && structure && !this.instantBuild) {
+        this.noise.setBuildActive(true);
+        this.noise.setBuildNoisePerSec(structure.noisePerSec);
+      } else {
+        this.noise.setBuildActive(false);
+        this.noise.setBuildNoisePerSec(0);
+      }
+    };
+    const updateDeconstructNoise = (structure: Wall | null, active: boolean): void => {
+      if (!this.noise) return;
+      if (active && structure) {
+        this.noise.setDeconstructActive(true);
+        this.noise.setDeconstructNoisePerSec(structure.noisePerSec);
+      } else {
+        this.noise.setDeconstructActive(false);
+        this.noise.setDeconstructNoisePerSec(0);
+      }
+    };
+    if (this.instantBuild && this.buildAction.active) {
+      const structure = activeStructure;
+      if (structure) {
+        structure.state = 'completed';
+        structure.buildProgressSec = structure.buildTimeSec;
+        structure.hp = structure.maxHp;
+      }
+      this.buildAction.active = false;
+      this.buildAction.structureId = null;
+    }
+    if (this.buildAction.active) {
+      const structure = activeStructure;
+      const stillValid = structure && !structure.isCompleted();
+      const withinRange =
+        structure
+          ? (() => {
+              const dx = structure.x - this.player.x;
+              const dy = structure.y - this.player.y;
+              const reach = buildRange + Math.max(structure.getHalfWidth(), structure.getHalfHeight());
+              return dx * dx + dy * dy <= reach * reach;
+            })()
+          : false;
+      if (!structure || !stillValid || !buildInteractHeld || isMoving || !withinRange) {
+        this.buildAction.active = false;
+        this.buildAction.structureId = null;
+        updateBuildNoise(null, false);
+      } else {
+        structure.beginConstruction();
+        const completed = structure.advanceConstruction(this.stepSec);
+        updateBuildNoise(structure, true);
+        if (completed) {
+          this.buildAction.active = false;
+          this.buildAction.structureId = null;
+          updateBuildNoise(null, false);
+          const hintSec = Number(((this.cfg.getGame() as any).ui?.hintSec ?? 2));
+          this.hud.setHint(`${structure.kind} completed`);
+          this.hintTimer = hintSec;
+        }
+      }
+    }
+    if (!this.buildAction.active && buildInteractHeld && nearestStructure) {
+      this.buildAction.active = true;
+      this.buildAction.structureId = nearestStructure.id;
+      nearestStructure.beginConstruction();
+      this.harvest.active = false;
+      this.harvest.progressSec = 0;
+      this.harvest.nodeId = null;
+      updateBuildNoise(nearestStructure, true);
+    } else if (!this.buildAction.active) {
+      updateBuildNoise(null, false);
+    }
+    const selectedWall = this.selectedWallId ? this.walls.find((w) => w.id === this.selectedWallId) ?? null : null;
+    const deconstructSec = Number((this.cfg.getGame() as any).player?.deconstructActionSec ?? 2.5);
+    const canReachWall = (wall: Wall | null): boolean => {
+      if (!wall) return false;
+      const dx = wall.x - this.player.x;
+      const dy = wall.y - this.player.y;
+      const reach = buildRange + Math.max(wall.getHalfWidth(), wall.getHalfHeight());
+      return dx * dx + dy * dy <= reach * reach;
+    };
+
+    if (this.deconstruct.active) {
+      const wall = this.walls.find((w) => w.id === this.deconstruct.wallId) ?? null;
+      const withinRange = canReachWall(wall);
+      if (!deconstructHeld || isMoving || !wall || !withinRange) {
+        this.deconstruct.active = false;
+        this.deconstruct.progressSec = 0;
+        this.deconstruct.wallId = null;
+        updateDeconstructNoise(null, false);
+      } else {
+        this.deconstruct.progressSec += this.stepSec;
+        updateDeconstructNoise(wall, true);
+        const duration = Math.max(0, deconstructSec);
+        if (duration === 0 || this.deconstruct.progressSec >= duration) {
+          this.completeDeconstruct(wall);
+          this.deconstruct.active = false;
+          this.deconstruct.progressSec = 0;
+          this.deconstruct.wallId = null;
+          updateDeconstructNoise(null, false);
+        }
+      }
+    } else if (deconstructHeld && !isMoving && selectedWall) {
+      const canStart = selectedWall.playerBuilt && selectedWall.isCompleted() && canReachWall(selectedWall);
+      if (canStart) {
+        this.deconstruct.active = true;
+        this.deconstruct.progressSec = 0;
+        this.deconstruct.wallId = selectedWall.id;
+        if (this.buildAction.active) {
+          this.buildAction.active = false;
+          this.buildAction.structureId = null;
+          updateBuildNoise(null, false);
+        }
+        if (this.harvest.active) {
+          this.harvest.active = false;
+          this.harvest.progressSec = 0;
+          this.harvest.nodeId = null;
+        }
+        updateDeconstructNoise(selectedWall, true);
+      } else if (this.hintTimer <= 0) {
+        let reason = '';
+        if (!selectedWall.playerBuilt) reason = 'Only player-built structures can be deconstructed';
+        else if (!selectedWall.isCompleted()) reason = 'Finish construction before deconstructing';
+        else if (!canReachWall(selectedWall)) reason = 'Move closer to deconstruct';
+        else reason = 'Cannot deconstruct right now';
+        this.hud.setHint(reason);
+        this.hintTimer = Number(((this.cfg.getGame() as any).ui?.hintSec ?? 2));
+      }
+    } else {
+      if (this.deconstruct.active) {
+        this.deconstruct.active = false;
+      }
+      this.deconstruct.progressSec = 0;
+      this.deconstruct.wallId = null;
+      updateDeconstructNoise(null, false);
+    }
+
+    const actionSec = (this.cfg.getGame() as any).player?.harvestActionSec ?? 2;
+    const nodes = this.resources.getNodes();
+    const maxDist = rangeTiles * this.cfg.getGame().tileSize;
     // Auto-deposit near storage crates
     const depositRadiusTiles = Number((this.cfg.getGame() as any).storage?.autoDepositRadius ?? 2);
     const depositR = depositRadiusTiles * this.cfg.getGame().tileSize;
@@ -515,38 +659,52 @@ export class GameApp {
       }
     }
 
-    if (this.harvest.active) {
-      const currentNode = nodes.find((n) => n.id === this.harvest.nodeId) || null;
-      const stillInRange = currentNode ? bestD2 <= maxDist * maxDist && currentNode.id === (nearest?.id ?? '') : false;
-      // Phase gating: cancel if node no longer allowed
-      const allowedNow = currentNode ? this.isNodeHarvestAllowed(currentNode) : false;
-      if (!interact || isMoving || !stillInRange || !currentNode || !allowedNow) {
-        // cancel
-        this.harvest.active = false;
-        this.harvest.progressSec = 0;
-        this.harvest.nodeId = null;
-        if (currentNode && !allowedNow) this.showPhaseHint(currentNode);
-      } else {
-        this.harvest.progressSec += this.stepSec;
-        if (this.harvest.progressSec >= actionSec) {
-          // complete a single harvest action
-          const { harvested, type } = this.resources.harvest(currentNode, actionSec);
-          if (harvested > 0) {
-            this.inventory.add(type, harvested);
-            this.experience.grantHarvestExperience(currentNode.archetype, harvested);
-          }
-          this.harvest.progressSec = 0;
+    if (!this.buildAction.active) {
+      let nearest: ResourceNode | null = null;
+      let bestD2 = Number.POSITIVE_INFINITY;
+      for (const n of nodes) {
+        const dx = n.x - this.player.x;
+        const dy = n.y - this.player.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 <= maxDist * maxDist && d2 < bestD2) {
+          bestD2 = d2;
+          nearest = n;
         }
       }
-    } else if (interact && nearest && !isMoving) {
-      // Check phase gating before starting
-      if (this.isNodeHarvestAllowed(nearest)) {
-        this.harvest.active = true;
-        this.harvest.progressSec = 0;
-        this.harvest.nodeId = nearest.id;
-      } else {
-        this.showPhaseHint(nearest);
+
+      if (this.harvest.active) {
+        const currentNode = nodes.find((n) => n.id === this.harvest.nodeId) || null;
+        const stillInRange = currentNode ? bestD2 <= maxDist * maxDist && currentNode.id === (nearest?.id ?? '') : false;
+        const allowedNow = currentNode ? this.isNodeHarvestAllowed(currentNode) : false;
+        if (!interact || isMoving || !stillInRange || !currentNode || !allowedNow) {
+          this.harvest.active = false;
+          this.harvest.progressSec = 0;
+          this.harvest.nodeId = null;
+          if (currentNode && !allowedNow) this.showPhaseHint(currentNode);
+        } else {
+          this.harvest.progressSec += this.stepSec;
+          if (this.harvest.progressSec >= actionSec) {
+            const { harvested, type } = this.resources.harvest(currentNode, actionSec);
+            if (harvested > 0) {
+              this.inventory.add(type, harvested);
+              this.experience.grantHarvestExperience(currentNode.archetype, harvested);
+            }
+            this.harvest.progressSec = 0;
+          }
+        }
+      } else if (interact && nearest && !isMoving) {
+        if (this.isNodeHarvestAllowed(nearest)) {
+          this.harvest.active = true;
+          this.harvest.progressSec = 0;
+          this.harvest.nodeId = nearest.id;
+        } else {
+          this.showPhaseHint(nearest);
+        }
       }
+    } else if (this.harvest.active) {
+      this.harvest.active = false;
+      this.harvest.progressSec = 0;
+      this.harvest.nodeId = null;
     }
     // Resources: interactive only, no passive ticking
     // Time system
@@ -706,17 +864,36 @@ export class GameApp {
     for (const s of this.storageCrates) {
       this.engine.drawStorageCrate(s.x, s.y, s.sizePx);
     }
+    if (this.buildPreview.active && !this.buildMenuVisible) {
+      const color = this.buildPreview.valid ? '#81c784' : '#ef5350';
+      this.engine.drawAABB(this.buildPreview.centerX, this.buildPreview.centerY, this.buildPreview.halfSize, this.buildPreview.halfSize, color);
+    }
+
     // Draw walls and door
     for (const w of this.walls) {
       const selected = this.selectedWallId === w.id;
       this.engine.drawWall(w.x, w.y, w.widthPx, w.type, selected, w.isOpen);
-      if (w.maxHp > 0 && w.hp < w.maxHp) {
+      if (!w.isCompleted()) {
+        const ratio = w.getConstructionRatio();
+        const barWidth = Math.max(18, w.widthPx * this.currentZoom * 0.9);
+        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
+        const barOffset = (w.heightPx / 2) * this.currentZoom + 6;
+        this.engine.drawHorizontalBar(w.x, w.y, barWidth, barHeight, ratio, barOffset, { fill: '#ffd54f', background: 'rgba(0,0,0,0.65)' });
+      } else if (w.maxHp > 0 && w.hp < w.maxHp) {
         const ratio = Math.max(0, Math.min(1, w.hp / w.maxHp));
         const barWidth = Math.max(18, w.widthPx * this.currentZoom * 0.9);
         const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
         const barOffset = (w.heightPx / 2) * this.currentZoom + 6;
         const barColor = ratio > 0.66 ? '#81c784' : ratio > 0.33 ? '#ffb74d' : '#e57373';
         this.engine.drawHorizontalBar(w.x, w.y, barWidth, barHeight, ratio, barOffset, { fill: barColor });
+      }
+      if (this.deconstruct.active && this.deconstruct.wallId === w.id) {
+        const duration = Math.max(0, Number((this.cfg.getGame() as any).player?.deconstructActionSec ?? 2.5));
+        const ratioDeconstruct = duration === 0 ? 1 : Math.max(0, Math.min(1, this.deconstruct.progressSec / duration));
+        const barWidth = Math.max(18, w.widthPx * this.currentZoom * 0.9);
+        const barHeight = Math.max(3, 4 * this.currentZoom * 0.6);
+        const barOffset = (w.heightPx / 2) * this.currentZoom + 14;
+        this.engine.drawHorizontalBar(w.x, w.y, barWidth, barHeight, ratioDeconstruct, barOffset, { fill: '#ff7043', background: 'rgba(0,0,0,0.65)' });
       }
     }
     // Debug: colliders
@@ -1170,6 +1347,36 @@ export class GameApp {
     window.location.reload();
   };
 
+  private completeDeconstruct(wall: Wall): void {
+    const salvage = this.makeWallSalvage(wall);
+    const tile = this.cfg.getGame().tileSize;
+    const summaryParts: string[] = [];
+    for (const [resource, amount] of Object.entries(salvage)) {
+      const refunded = Math.max(0, Math.floor(amount ?? 0));
+      if (refunded <= 0) continue;
+      this.inventory.add(resource, refunded);
+      summaryParts.push(`${refunded} ${resource}`);
+      this.combatText.spawn({
+        text: `+${refunded} ${resource}`,
+        color: '#81c784',
+        lifetimeSec: 1.4,
+        risePx: tile,
+        spreadXPx: tile * 0.3,
+        baseYOffsetPx: tile,
+        getPosition: () => ({ x: this.player.x, y: this.player.y })
+      });
+    }
+    this.bus.emit<StructureDestroyedEvent>('StructureDestroyed', { structureId: wall.id, attackerId: this.player.id });
+    const hintSec = Number(((this.cfg.getGame() as any).ui?.hintSec ?? 2));
+    if (summaryParts.length > 0) {
+      this.hud.setHint(`Recovered ${summaryParts.join(', ')}`);
+      this.hintTimer = hintSec;
+    } else if (hintSec > 0) {
+      this.hud.setHint(`${wall.kind} dismantled`);
+      this.hintTimer = hintSec;
+    }
+  }
+
   private makeWallSalvage(wall: Wall): Record<string, number> {
     const buildables: any = this.cfg.getBuildables();
     const salvagePct = Number((buildables?.globals?.salvageRefundPct ?? 50) / 100);
@@ -1188,6 +1395,336 @@ export class GameApp {
     this.hintTimer = hintSec;
   }
 
+  private loadBuildBlueprints(): void {
+    if (!this.structureBuilder) {
+      this.buildBlueprints = [];
+      this.buildSelectedIndex = 0;
+      this.buildSelectedBlueprintId = null;
+      return;
+    }
+    const list = [...this.structureBuilder.getBlueprints()].sort((a, b) => a.label.localeCompare(b.label));
+    this.buildBlueprints = list;
+    if (list.length === 0) {
+      this.buildSelectedIndex = 0;
+      this.buildSelectedBlueprintId = null;
+      return;
+    }
+    const currentIndex = list.findIndex((bp) => bp.id === this.buildSelectedBlueprintId);
+    this.buildSelectedIndex = currentIndex >= 0 ? currentIndex : 0;
+    this.buildSelectedBlueprintId = list[this.buildSelectedIndex].id;
+    if (this.buildMenuVisible) {
+      const options = this.getBuildMenuOptions();
+      this.buildMenu.update(options, this.buildSelectedBlueprintId ?? '');
+    }
+  }
+
+  private getBuildMenuOptions(): BuildRadialOption[] {
+    return this.buildBlueprints.map((bp) => ({
+      id: bp.id,
+      label: bp.label,
+      cost: bp.cost,
+      buildTimeSec: bp.buildTimeSec,
+      noisePerSec: bp.noisePerSec,
+      affordable: this.canAffordStructure(bp.cost)
+    }));
+  }
+
+  private getSelectedBlueprint(): StructureBlueprint | null {
+    if (this.buildBlueprints.length === 0) return null;
+    const index = Math.max(0, Math.min(this.buildBlueprints.length - 1, this.buildSelectedIndex));
+    return this.buildBlueprints[index] ?? null;
+  }
+
+  private cycleBlueprint(delta: number): void {
+    if (this.buildBlueprints.length === 0) return;
+    const count = this.buildBlueprints.length;
+    this.buildSelectedIndex = (this.buildSelectedIndex + delta + count) % count;
+    this.buildSelectedBlueprintId = this.buildBlueprints[this.buildSelectedIndex].id;
+    this.buildPreviewSuppressed = false;
+  }
+
+  private updateBuildMenu(): void {
+    if (!this.buildMenu) return;
+    const hasBlueprints = this.buildBlueprints.length > 0;
+    if (!hasBlueprints) {
+      if (this.buildMenuVisible) {
+        this.buildMenu.hide();
+        this.buildMenuVisible = false;
+      }
+      return;
+    }
+
+    let selectionChanged = false;
+    if (this.input.consumeBuildCycleNext()) {
+      this.cycleBlueprint(1);
+      selectionChanged = true;
+    }
+    if (this.input.consumeBuildCyclePrev()) {
+      this.cycleBlueprint(-1);
+      selectionChanged = true;
+    }
+
+    const held = this.input.isBuildMenuHeld();
+    const selected = this.getSelectedBlueprint();
+    const options = this.getBuildMenuOptions();
+
+    if (held) {
+      if (!this.buildMenuVisible) {
+        this.buildMenuVisible = true;
+        this.buildMenu.show(options, selected?.id ?? '');
+        this.buildPreviewSuppressed = false;
+      } else if (selectionChanged) {
+        this.buildMenu.update(options, selected?.id ?? '');
+      } else {
+        this.buildMenu.update(options, selected?.id ?? '');
+      }
+    } else if (this.buildMenuVisible) {
+      this.buildMenu.hide();
+      this.buildMenuVisible = false;
+    }
+  }
+
+  private updateBuildPreview(): void {
+    const blueprint = this.getSelectedBlueprint();
+    if (!blueprint) {
+      this.buildPreview.active = false;
+      return;
+    }
+    if (this.buildMenuVisible || this.buildPreviewSuppressed) {
+      this.buildPreview.active = false;
+      this.buildPreview.blueprintId = blueprint.id;
+      if (this.buildPreviewSuppressed) this.buildPreviewSuppressed = false;
+      return;
+    }
+    const tileSize = this.cfg.getGame().tileSize;
+    const totalTilesX = Math.max(1, Math.floor(this.worldW / tileSize));
+    const totalTilesY = Math.max(1, Math.floor(this.worldH / tileSize));
+    const footprint = Math.max(1, blueprint.footprintTiles);
+    const clampX = Math.max(0, totalTilesX - footprint);
+    const clampY = Math.max(0, totalTilesY - footprint);
+    const rawTileX = Math.floor(this.mouseWorld.x / tileSize);
+    const rawTileY = Math.floor(this.mouseWorld.y / tileSize);
+    const tileX = Math.min(clampX, Math.max(0, rawTileX));
+    const tileY = Math.min(clampY, Math.max(0, rawTileY));
+    const centerX = (tileX + footprint / 2) * tileSize;
+    const centerY = (tileY + footprint / 2) * tileSize;
+    const halfSize = (footprint * tileSize) / 2;
+    const valid = this.isPlacementValid(tileX, tileY, footprint, centerX, centerY, halfSize);
+    this.buildPreview = {
+      active: true,
+      blueprintId: blueprint.id,
+      centerX,
+      centerY,
+      halfSize,
+      tileX,
+      tileY,
+      valid
+    };
+  }
+
+  private isPlacementValid(tileX: number, tileY: number, footprint: number, centerX: number, centerY: number, halfSize: number): boolean {
+    const tileSize = this.cfg.getGame().tileSize;
+    const totalTilesX = Math.max(1, Math.floor(this.worldW / tileSize));
+    const totalTilesY = Math.max(1, Math.floor(this.worldH / tileSize));
+    if (tileX < 0 || tileY < 0 || tileX + footprint > totalTilesX || tileY + footprint > totalTilesY) return false;
+    for (const wall of this.walls) {
+      const hw = wall.widthPx / 2;
+      const hh = wall.heightPx / 2;
+      const overlapX = Math.abs(centerX - wall.x) < halfSize + hw;
+      const overlapY = Math.abs(centerY - wall.y) < halfSize + hh;
+      if (overlapX && overlapY) return false;
+    }
+    for (const crate of this.storageCrates) {
+      const half = crate.sizePx / 2;
+      const overlapX = Math.abs(centerX - crate.x) < halfSize + half;
+      const overlapY = Math.abs(centerY - crate.y) < halfSize + half;
+      if (overlapX && overlapY) return false;
+    }
+    for (const node of this.resources.getNodes()) {
+      const half = node.radiusPx;
+      const overlapX = Math.abs(centerX - node.x) < halfSize + half;
+      const overlapY = Math.abs(centerY - node.y) < halfSize + half;
+      if (overlapX && overlapY) return false;
+    }
+    return true;
+  }
+
+  private handleBuildPlacement(): boolean {
+    const blueprint = this.getSelectedBlueprint();
+    if (!blueprint) return false;
+    if (!this.buildPreview.active || !this.buildPreview.valid) return false;
+    if (!this.canAffordStructure(blueprint.cost)) {
+      const missing = this.describeMissingResources(blueprint.cost);
+      const hintSec = Number(((this.cfg.getGame() as any).ui?.hintSec ?? 2));
+      this.hud.setHint(missing ? `Need ${missing}` : 'Insufficient resources');
+      this.hintTimer = hintSec;
+      return false;
+    }
+    this.spendStructureCost(blueprint.cost);
+    this.queueBuildPlacement(blueprint, this.buildPreview.tileX, this.buildPreview.tileY);
+    return true;
+  }
+
+  private queueBuildPlacement(blueprint: StructureBlueprint, tileX: number, tileY: number): void {
+    if (!this.structureBuilder) return;
+    const structureId = `struct-${this.nextStructureId++}`;
+    const structure = this.structureBuilder.createStructureInstance(blueprint.id, structureId) as Wall;
+    structure.setGridPosition(tileX, tileY);
+    structure.playerBuilt = true;
+    structure.isOpen = false;
+    if (this.instantBuild) {
+      structure.state = 'completed';
+      structure.buildProgressSec = structure.buildTimeSec;
+      structure.hp = structure.maxHp;
+    } else {
+      structure.beginConstruction();
+    }
+    this.walls.push(structure);
+    this.buildPreviewSuppressed = true;
+    this.buildPreview.active = false;
+    const hintSec = Number(((this.cfg.getGame() as any).ui?.hintSec ?? 2));
+    this.hud.setHint(`${blueprint.label} placement started`);
+    this.hintTimer = hintSec;
+  }
+
+  private canAffordStructure(cost: Record<string, number>): boolean {
+    if (this.freeBuild) return true;
+    for (const [resource, amount] of Object.entries(cost)) {
+      const need = Math.max(0, amount);
+      if (need === 0) continue;
+      const available = this.storedTotals[resource] ?? 0;
+      if (available < need) return false;
+    }
+    return true;
+  }
+
+  private spendStructureCost(cost: Record<string, number>): boolean {
+    if (this.freeBuild) return true;
+    if (!this.canAffordStructure(cost)) return false;
+    for (const [resource, amount] of Object.entries(cost)) {
+      const need = Math.max(0, amount);
+      if (need === 0) continue;
+      const current = this.storedTotals[resource] ?? 0;
+      this.storedTotals[resource] = Math.max(0, current - need);
+    }
+    return true;
+  }
+
+  private describeMissingResources(cost: Record<string, number>): string {
+    if (this.freeBuild) return '';
+    for (const [resource, amount] of Object.entries(cost)) {
+      const need = Math.max(0, amount);
+      if (need === 0) continue;
+      const have = this.storedTotals[resource] ?? 0;
+      if (have < need) {
+        return `${need - have} ${resource}`;
+      }
+    }
+    return '';
+  }
+
+  private cancelBuildPlacementMode(): void {
+    this.buildPreviewSuppressed = true;
+    this.buildPreview.active = false;
+  }
+
+  private onCanvasMouseMove = (e: MouseEvent): void => {
+    const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const world = this.engine.screenToWorld(sx, sy);
+    this.mouseWorld.x = world.x;
+    this.mouseWorld.y = world.y;
+  };
+
+  private onCanvasMouseDown = (e: MouseEvent): void => {
+    if (e.button === 2) {
+      e.preventDefault();
+      this.cancelBuildPlacementMode();
+    }
+  };
+
+  private onCanvasContextMenu = (e: MouseEvent): void => {
+    e.preventDefault();
+    this.cancelBuildPlacementMode();
+  };
+
+  private onCanvasClick = (e: MouseEvent): void => {
+    if (e.button !== 0 || !this.canvasEl) return;
+    const rect = (e.currentTarget as HTMLCanvasElement).getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const world = this.engine.screenToWorld(sx, sy);
+    this.mouseWorld.x = world.x;
+    this.mouseWorld.y = world.y;
+
+    if (!this.buildMenuVisible && this.buildPreview.active && this.buildPreview.valid) {
+      if (this.handleBuildPlacement()) {
+        e.preventDefault();
+        return;
+      }
+    }
+    if (this.buildMenuVisible) return;
+
+    const zs = this.zombies?.getZombies?.() ?? [];
+    let pickedZombie: Zombie | null = null;
+    let bestZd2 = Number.POSITIVE_INFINITY;
+    for (const z of zs as any) {
+      const dx = z.x - world.x;
+      const dy = z.y - world.y;
+      const d2 = dx * dx + dy * dy;
+      const r = this.cfg.getGame().tileSize * 0.3;
+      if (d2 <= r * r && d2 < bestZd2) {
+        bestZd2 = d2;
+        pickedZombie = z as Zombie;
+      }
+    }
+    if (pickedZombie) {
+      this.selectedZombieId = pickedZombie.id;
+      this.selectedNodeId = null;
+      this.selectedWallId = null;
+      this.nodePanel?.setNode(null);
+      this.updateZombieInfoPanel();
+      return;
+    }
+
+    let wallPicked: Wall | null = null;
+    for (const w of this.walls) {
+      if (w.containsPoint(world.x, world.y)) {
+        wallPicked = w;
+        break;
+      }
+    }
+    if (wallPicked) {
+      this.selectedWallId = wallPicked.id;
+      this.selectedNodeId = null;
+      const buildables = this.cfg.getBuildables() as any;
+      const salvagePct = Number((buildables?.globals?.salvageRefundPct ?? 50) / 100);
+      const cost = wallPicked.cost ?? {};
+      const salv: Record<string, number> = {};
+      for (const [k, v] of Object.entries(cost)) salv[k] = Math.floor((v ?? 0) * salvagePct);
+      this.nodePanel?.setWall(wallPicked, salv);
+      return;
+    }
+
+    const nodes = this.resources.getNodes();
+    let picked: ResourceNode | null = null;
+    let bestD2 = Number.POSITIVE_INFINITY;
+    for (const n of nodes) {
+      const dx = n.x - world.x;
+      const dy = n.y - world.y;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        picked = n;
+      }
+    }
+    if (picked && bestD2 <= picked.radiusPx * picked.radiusPx) {
+      this.selectedNodeId = picked.id;
+      this.selectedWallId = null;
+      this.nodePanel?.setNode(picked);
+    }
+  };
   private onZoomKey = (e: KeyboardEvent): void => {
     let dz = 0;
     if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') dz = 0.1;
@@ -1201,6 +1738,10 @@ export class GameApp {
 
   // Zombies removed: no spawning helpers
 }
+
+
+
+
 
 
 

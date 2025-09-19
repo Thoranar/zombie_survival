@@ -1,4 +1,4 @@
-﻿import { Actor } from '../../entities/Actor';
+import { Actor } from '../../entities/Actor';
 import { segmentIntersectsAABB } from '../../math/Geometry';
 
 
@@ -238,7 +238,7 @@ export class Zombie extends Actor {
       }
     } else {
       if (structureTarget) {
-        const current = wallColliders.find((c) => c.id === structureTarget.id);
+        const current = wallColliders.find((c) => c.id === structureTarget!.id);
         if (!current || !segmentIntersectsAABB(this.x, this.y, player.x, player.y, current.x, current.y, current.hw, current.hh)) {
           this.clearAttackStructure();
           structureTarget = null;

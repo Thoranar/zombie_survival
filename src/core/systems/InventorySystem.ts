@@ -24,6 +24,26 @@ export class InventorySystem {
     return this.totals;
   }
 
+  public canAfford(cost: Record<string, number>): boolean {
+    for (const [resource, amount] of Object.entries(cost)) {
+      const need = Math.max(0, amount);
+      if (need === 0) continue;
+      if ((this.totals[resource] ?? 0) < need) return false;
+    }
+    return true;
+  }
+
+  public spend(cost: Record<string, number>): boolean {
+    if (!this.canAfford(cost)) return false;
+    for (const [resource, amount] of Object.entries(cost)) {
+      const need = Math.max(0, amount);
+      if (need === 0) continue;
+      if (!(resource in this.totals)) this.totals[resource] = 0;
+      this.totals[resource] = Math.max(0, this.totals[resource] - need);
+    }
+    return true;
+  }
+
   public takeAll(): Record<string, number> {
     const out: Record<string, number> = {};
     for (const [k, v] of Object.entries(this.totals)) out[k] = v;

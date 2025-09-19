@@ -21,9 +21,16 @@ export class NoiseSystem {
   private readonly cfg: NoiseConfig;
   private radiusTiles = 0;
   private targetTiles = 0;
+  private movementTiles = 0;
   private harvestNoisePerSec = 0;
   private harvestActive = false;
   private harvestAccumSec = 0;
+  private buildNoisePerSec = 0;
+  private buildActive = false;
+  private buildAccumSec = 0;
+  private deconstructNoisePerSec = 0;
+  private deconstructActive = false;
+  private deconstructAccumSec = 0;
 
   constructor(cfg: NoiseConfig) {
     this.cfg = cfg;
@@ -32,29 +39,62 @@ export class NoiseSystem {
   public setByMovement(mode: MoveMode): void {
     const base =
       mode === 'crouch' ? this.cfg.crouchTiles : mode === 'sprint' ? this.cfg.sprintTiles : mode === 'walk' ? this.cfg.walkTiles : 0;
-    this.targetTiles = Math.max(0, base + this.getHarvestContributionTiles());
+    this.movementTiles = Math.max(0, base);
+    this.updateTarget();
   }
 
   public setHarvestNoisePerSec(noisePerSec: number): void {
     this.harvestNoisePerSec = Math.max(0, noisePerSec || 0);
-    // update target in case movement target already set
-    this.targetTiles = Math.max(0, this.targetTiles - this.getHarvestContributionTiles() + this.getHarvestContributionTiles());
+    this.updateTarget();
   }
 
   public setHarvestActive(active: boolean): void {
     this.harvestActive = active;
+    if (!active) this.harvestAccumSec = 0;
+    this.updateTarget();
   }
 
-  private getHarvestContributionTiles(): number {
-    const scale = 1 + this.cfg.harvestScalePerSec * this.harvestAccumSec;
-    return this.harvestNoisePerSec * this.cfg.harvestTilesPerNoise * scale;
+  public setBuildNoisePerSec(noisePerSec: number): void {
+    this.buildNoisePerSec = Math.max(0, noisePerSec || 0);
+    this.updateTarget();
+  }
+
+  public setBuildActive(active: boolean): void {
+    this.buildActive = active;
+    if (!active) this.buildAccumSec = 0;
+    this.updateTarget();
+  }
+
+  public setDeconstructNoisePerSec(noisePerSec: number): void {
+    this.deconstructNoisePerSec = Math.max(0, noisePerSec || 0);
+    this.updateTarget();
+  }
+
+  public setDeconstructActive(active: boolean): void {
+    this.deconstructActive = active;
+    if (!active) this.deconstructAccumSec = 0;
+    this.updateTarget();
+  }
+
+  private getActionContributionTiles(): number {
+    const harvest = this.harvestNoisePerSec * this.cfg.harvestTilesPerNoise * (1 + this.cfg.harvestScalePerSec * this.harvestAccumSec);
+    const build = this.buildNoisePerSec * this.cfg.harvestTilesPerNoise * (1 + this.cfg.harvestScalePerSec * this.buildAccumSec);
+    const deconstruct = this.deconstructNoisePerSec * this.cfg.harvestTilesPerNoise * (1 + this.cfg.harvestScalePerSec * this.deconstructAccumSec);
+    return harvest + build + deconstruct;
+  }
+
+  private updateTarget(): void {
+    this.targetTiles = Math.max(0, this.movementTiles + this.getActionContributionTiles());
   }
 
   public tick(dtSec: number, _moving: boolean): void {
-    // Update continuous harvest accumulation
     if (this.harvestActive && this.harvestNoisePerSec > 0) this.harvestAccumSec += dtSec;
     else this.harvestAccumSec = 0;
-    // Approach target with ramp up; if current above target, decay down
+    if (this.buildActive && this.buildNoisePerSec > 0) this.buildAccumSec += dtSec;
+    else this.buildAccumSec = 0;
+    if (this.deconstructActive && this.deconstructNoisePerSec > 0) this.deconstructAccumSec += dtSec;
+    else this.deconstructAccumSec = 0;
+    this.updateTarget();
     if (this.radiusTiles < this.targetTiles) {
       const inc = this.cfg.rampTilesPerSec * dtSec;
       this.radiusTiles = Math.min(this.targetTiles, this.radiusTiles + inc);

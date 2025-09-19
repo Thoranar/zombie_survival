@@ -22,6 +22,8 @@ export class DebugMenu {
     showZombieTargets: boolean;
     showZombieAggro: boolean;
     showExperienceNumbers: boolean;
+    freeBuild: boolean;
+    instantBuild: boolean;
   }) => void;
   private spawnHordeBtn!: HTMLButtonElement;
   private damagePlayerBtn!: HTMLButtonElement;
@@ -84,6 +86,8 @@ export class DebugMenu {
     const row9 = makeRow('Show Zombie Targets', (cb) => ((this as any).zTargetCb = cb));
     const row10 = makeRow('Show Zombie Aggro Info', (cb) => ((this as any).zAggroCb = cb));
     const row11 = makeRow('Show XP Numbers', (cb) => (this.xpNumbersCb = cb));
+    const row12 = makeRow('Free Build', (cb) => ((this as any).freeBuildCb = cb));
+    const row13 = makeRow('Instant Build', (cb) => ((this as any).instantBuildCb = cb));
 
     const sep = document.createElement('div');
     sep.style.margin = '6px 0';
@@ -140,6 +144,8 @@ export class DebugMenu {
     root.appendChild(row9);
     root.appendChild(row10);
     root.appendChild(row11);
+    root.appendChild(row12);
+    root.appendChild(row13);
     root.appendChild(sep);
     root.appendChild(actions);
     host.appendChild(root);
@@ -154,6 +160,8 @@ export class DebugMenu {
     const disableChaseCb: HTMLInputElement | undefined = (this as any).disableChaseCb;
     const zTargetCb: HTMLInputElement | undefined = (this as any).zTargetCb;
     const zAggroCb: HTMLInputElement | undefined = (this as any).zAggroCb;
+    const freeBuildCb: HTMLInputElement | undefined = (this as any).freeBuildCb;
+    const instantBuildCb: HTMLInputElement | undefined = (this as any).instantBuildCb;
     this.onChange?.({
       showColliders: !!this.collidersCb?.checked,
       showNoSpawnRadius: !!this.noSpawnCb?.checked,
@@ -165,7 +173,9 @@ export class DebugMenu {
       disableChase: !!disableChaseCb?.checked,
       showZombieTargets: !!zTargetCb?.checked,
       showZombieAggro: !!zAggroCb?.checked,
-      showExperienceNumbers: !!this.xpNumbersCb?.checked
+      showExperienceNumbers: !!this.xpNumbersCb?.checked,
+      freeBuild: !!freeBuildCb?.checked,
+      instantBuild: !!instantBuildCb?.checked
     });
   }
 
@@ -181,6 +191,8 @@ export class DebugMenu {
     showZombieTargets: boolean;
     showZombieAggro: boolean;
     showExperienceNumbers: boolean;
+    freeBuild: boolean;
+    instantBuild: boolean;
   }) => void): void {
     this.onChange = handler;
   }
@@ -194,6 +206,8 @@ export class DebugMenu {
   public setShowZombieTargets(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).zTargetCb; if (n) n.checked = value; }
   public setShowZombieAggro(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).zAggroCb; if (n) n.checked = value; }
   public setShowExperienceNumbers(value: boolean): void { if (this.xpNumbersCb) this.xpNumbersCb.checked = value; }
+  public setFreeBuild(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).freeBuildCb; if (n) n.checked = value; }
+  public setInstantBuild(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).instantBuildCb; if (n) n.checked = value; }
 
   public setOnSpawnHorde(handler: () => void): void { this.onSpawnHorde = handler; }
   public setShowHordeDebug(value: boolean): void { const n: HTMLInputElement | undefined = (this as any).hordeDbgCb; if (n) n.checked = value; }
